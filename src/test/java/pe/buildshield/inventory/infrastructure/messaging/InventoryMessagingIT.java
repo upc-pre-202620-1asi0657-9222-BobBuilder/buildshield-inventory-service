@@ -13,12 +13,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
 import pe.buildshield.inventory.application.StockCommandService;
 import pe.buildshield.inventory.shared.messaging.Topics;
 import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
 import pe.buildshield.inventory.support.InventoryIntegrationTest;
+import pe.buildshield.inventory.support.KafkaConsumersReady;
 import pe.buildshield.inventory.support.TestDatabase;
 import pe.buildshield.inventory.support.TestEvents;
 
@@ -58,6 +60,9 @@ class InventoryMessagingIT {
     @Autowired
     ObjectMapper json;
 
+    @Autowired
+    KafkaListenerEndpointRegistry listeners;
+
     @Value("${spring.kafka.bootstrap-servers}")
     String bootstrapServers;
 
@@ -70,6 +75,7 @@ class InventoryMessagingIT {
 
     @BeforeEach
     void catalog() {
+        KafkaConsumersReady.awaitAssignment(listeners);
         TestDatabase.reset(jdbc);
         organization = UUID.randomUUID();
         warehouse = UUID.randomUUID();
