@@ -31,6 +31,7 @@ import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
 import pe.buildshield.inventory.support.InMemorySiteDirectory;
 import pe.buildshield.inventory.support.InMemoryStockRepository;
+import pe.buildshield.inventory.support.InMemoryWorksiteSupplyRepository;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -59,8 +60,9 @@ class StockCommandServiceTest {
     private final InMemoryStockRepository stock = new InMemoryStockRepository();
     private final InMemorySiteDirectory directory = new InMemorySiteDirectory();
     private final OutboxWriter outbox = mock(OutboxWriter.class);
+    private final InMemoryWorksiteSupplyRepository supplies = new InMemoryWorksiteSupplyRepository();
     private final StockCommandService service = new StockCommandService(
-            new StockOperations(stock, Clock.fixed(NOW, ZoneOffset.UTC)), stock, directory, outbox);
+            new StockOperations(stock, Clock.fixed(NOW, ZoneOffset.UTC)), stock, directory, outbox, supplies);
 
     private Site central;
     private Site torre;
@@ -231,7 +233,7 @@ class StockCommandServiceTest {
         };
         racing.put(central.id(), cement.id(), "100", "0");
         StockCommandService racy = new StockCommandService(new StockOperations(racing, Clock.systemUTC()), racing,
-                directory, outbox);
+                directory, outbox, supplies);
 
         assertThatThrownBy(() -> racy.reserveForOrder(new OrderApproved(UUID.randomUUID(), central.id(), List.of(
                 new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("50"))))))
@@ -283,7 +285,7 @@ class StockCommandServiceTest {
         StockOperations failing = mock(StockOperations.class);
         org.mockito.Mockito.when(failing.consumeReservation(any(), any(), any(), any(), any()))
                 .thenThrow(new ConflictException("STOCK_CONCURRENT_MODIFICATION", "cambió"));
-        StockCommandService withFailure = new StockCommandService(failing, stock, directory, outbox);
+        StockCommandService withFailure = new StockCommandService(failing, stock, directory, outbox, supplies);
 
         assertThatThrownBy(() -> withFailure.deductForDispatch(new DispatchDeparted(UUID.randomUUID(),
                 UUID.randomUUID(), central.id(), "MAN", List.of(new OrderLine(UUID.randomUUID(), cement.id(),
@@ -297,9 +299,9 @@ class StockCommandServiceTest {
         UUID reception = UUID.randomUUID();
         UUID dispatch = UUID.randomUUID();
 
-        service.receiveAtWorksite(new ReceptionReceived(reception, dispatch, torre.id(), InventoryEvents.SOURCE_PARTIAL,
+        service.receiveAtWorksite(new ReceptionReceived(reception, dispatch, torre.id(), null, InventoryEvents.SOURCE_PARTIAL,
                 List.of(new ReceivedLine(cement.id(), new BigDecimal("20")), new ReceivedLine(steel.id(), BigDecimal.ZERO))));
-        service.receiveAtWorksite(new ReceptionReceived(reception, dispatch, torre.id(),
+        service.receiveAtWorksite(new ReceptionReceived(reception, dispatch, torre.id(), null,
                 InventoryEvents.SOURCE_CONFIRMATION, List.of(new ReceivedLine(cement.id(), new BigDecimal("9.5")),
                 new ReceivedLine(steel.id(), null))));
 
@@ -319,7 +321,7 @@ class StockCommandServiceTest {
 
     @Test
     void a_reception_without_new_quantities_changes_nothing_and_publishes_nothing() {
-        service.receiveAtWorksite(new ReceptionReceived(UUID.randomUUID(), UUID.randomUUID(), torre.id(),
+        service.receiveAtWorksite(new ReceptionReceived(UUID.randomUUID(), UUID.randomUUID(), torre.id(), null,
                 InventoryEvents.SOURCE_CONFIRMATION, List.of(new ReceivedLine(cement.id(), BigDecimal.ZERO))));
 
         assertThat(stock.movements).isEmpty();

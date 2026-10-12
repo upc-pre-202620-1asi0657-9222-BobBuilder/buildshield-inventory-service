@@ -29,9 +29,11 @@ public final class OrderingSignals {
      * {@code ReceptionPartiallyReceived} o {@code ReceptionConfirmed}: sumar a la obra solo el
      * {@code deltaQuantity} de cada línea.
      *
-     * @param source {@link InventoryEvents#SOURCE_PARTIAL} o {@link InventoryEvents#SOURCE_CONFIRMATION}
+     * @param warehouseId almacén de origen del despacho (nulo si el evento no lo trae); se guarda para devolver
+     *                    el saldo a ese almacén (US43)
+     * @param source      {@link InventoryEvents#SOURCE_PARTIAL} o {@link InventoryEvents#SOURCE_CONFIRMATION}
      */
-    public record ReceptionReceived(UUID receptionId, UUID dispatchId, UUID worksiteId, String source,
+    public record ReceptionReceived(UUID receptionId, UUID dispatchId, UUID worksiteId, UUID warehouseId, String source,
             List<ReceivedLine> lines) {
     }
 

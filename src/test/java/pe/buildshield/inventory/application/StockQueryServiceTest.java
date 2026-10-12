@@ -19,6 +19,7 @@ import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
 import pe.buildshield.inventory.support.InMemorySiteDirectory;
 import pe.buildshield.inventory.support.InMemoryStockRepository;
+import pe.buildshield.inventory.support.InMemoryWorksiteSupplyRepository;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -69,7 +70,7 @@ class StockQueryServiceTest {
         stock.put(central.id(), UUID.randomUUID(), "1", "0");
         TenantContext.set(ADMIN);
         StockCommandService commands = new StockCommandService(new StockOperations(stock, Clock.systemUTC()), stock,
-                directory, mock(OutboxWriter.class));
+                directory, mock(OutboxWriter.class), new InMemoryWorksiteSupplyRepository());
         order = UUID.randomUUID();
         UUID line = UUID.randomUUID();
         commands.reserveForOrder(new OrderApproved(order, central.id(), List.of(

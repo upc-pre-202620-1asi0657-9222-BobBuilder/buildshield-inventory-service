@@ -25,6 +25,12 @@ final class Payloads {
         return UUID.fromString(value.asText());
     }
 
+    /** Campo opcional: nulo si falta o está vacío. */
+    static UUID optionalUuid(JsonNode payload, String field) {
+        String value = text(payload, field);
+        return value == null || value.isBlank() ? null : UUID.fromString(value);
+    }
+
     static String text(JsonNode payload, String field) {
         return payload.hasNonNull(field) ? payload.get(field).asText() : null;
     }

@@ -16,6 +16,7 @@ import java.util.List;
 
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.decimal;
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.list;
+import static pe.buildshield.inventory.infrastructure.messaging.Payloads.optionalUuid;
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.text;
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.uuid;
 
@@ -86,7 +87,7 @@ public class OrderingEventConsumer {
 
     private static OrderingSignals.ReceptionReceived reception(JsonNode payload, String source) {
         return new OrderingSignals.ReceptionReceived(uuid(payload, "receptionId"), uuid(payload, "dispatchId"),
-                uuid(payload, "worksiteId"), source, list(payload, "lines",
+                uuid(payload, "worksiteId"), optionalUuid(payload, "warehouseId"), source, list(payload, "lines",
                 line -> new OrderingSignals.ReceivedLine(uuid(line, "materialId"), decimal(line, "deltaQuantity"))));
     }
 }

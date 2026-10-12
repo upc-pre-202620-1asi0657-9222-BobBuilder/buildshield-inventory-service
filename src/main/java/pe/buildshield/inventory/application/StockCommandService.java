@@ -21,6 +21,7 @@ import pe.buildshield.inventory.domain.model.Quantity;
 import pe.buildshield.inventory.domain.model.StockItem;
 import pe.buildshield.inventory.domain.model.StockRepository;
 import pe.buildshield.inventory.domain.model.StockReservation;
+import pe.buildshield.inventory.domain.model.WorksiteSupplyRepository;
 import pe.buildshield.inventory.shared.error.ConflictException;
 import pe.buildshield.inventory.shared.error.ResourceNotFoundException;
 import pe.buildshield.inventory.shared.messaging.OutboxWriter;
@@ -60,13 +61,15 @@ public class StockCommandService {
     private final StockRepository stock;
     private final SiteDirectory directory;
     private final OutboxWriter outbox;
+    private final WorksiteSupplyRepository supplies;
 
     public StockCommandService(StockOperations operations, StockRepository stock, SiteDirectory directory,
-            OutboxWriter outbox) {
+            OutboxWriter outbox, WorksiteSupplyRepository supplies) {
         this.operations = operations;
         this.stock = stock;
         this.directory = directory;
         this.outbox = outbox;
+        this.supplies = supplies;
     }
 
     /** Entrada sin tipo explícito: inventario inicial si el material aún no tiene stock en el almacén. */
@@ -190,7 +193,10 @@ public class StockCommandService {
                 new InventoryEvents.StockDeducted(dispatch.dispatchId(), dispatch.orderId(), dispatch.warehouseId(), lines));
     }
 
-    /** Saga, paso 5: suma a la obra solo la diferencia recibida de cada línea (parcial o conformidad). */
+    /**
+     * Saga, paso 5: suma a la obra solo la diferencia recibida de cada línea (parcial o conformidad) y anota el
+     * almacén de origen de lo recibido (para la devolución de saldos, US43).
+     */
     @Transactional
     public void receiveAtWorksite(ReceptionReceived reception) {
         List<ReceivedLine> lines = new ArrayList<>();
@@ -200,6 +206,10 @@ public class StockCommandService {
             }
             StockLevel level = operations.add(reception.worksiteId(), line.materialId(), line.deltaQuantity(),
                     "Recepción " + reception.receptionId());
+            if (reception.warehouseId() != null) {
+                supplies.recordSupply(reception.worksiteId(), line.materialId(), reception.warehouseId(),
+                        new Quantity(line.deltaQuantity()).value());
+            }
             lines.add(new ReceivedLine(line.materialId(), new Quantity(line.deltaQuantity()).value(),
                     level.availableQty()));
         }
