@@ -16,6 +16,7 @@ import pe.buildshield.inventory.application.OrderingSignals.OrderLine;
 import pe.buildshield.inventory.application.OrderingSignals.ReceptionReceived;
 import pe.buildshield.inventory.application.SiteDirectory.MaterialInfo;
 import pe.buildshield.inventory.application.SiteDirectory.Site;
+import pe.buildshield.inventory.domain.model.EntryType;
 import pe.buildshield.inventory.domain.model.Quantity;
 import pe.buildshield.inventory.domain.model.StockItem;
 import pe.buildshield.inventory.domain.model.StockRepository;
@@ -38,7 +39,8 @@ import java.util.UUID;
  * transacción (Transactional Outbox).
  *
  * <ul>
- *   <li>Carga de existencias por REST (administrador o encargado del almacén).</li>
+ *   <li>Carga de existencias por REST (administrador o encargado del almacén): inventario inicial o reposición
+ *       (US40), con su propio tipo de movimiento en el historial.</li>
  *   <li>Saga de reserva (plan §6): {@code OrderApproved} reserva todo o nada y responde {@code StockReserved} o
  *       {@code StockReservationRejected}; {@code DispatchDeparted} consume la reserva y descuenta del almacén;
  *       lo recibido en obra suma solo el {@code deltaQuantity}; {@code OrderRejected} y {@code OrderClosed}
@@ -67,9 +69,24 @@ public class StockCommandService {
         this.outbox = outbox;
     }
 
-    /** Entrada de material a un almacén activo: el administrador o un encargado asignado a ese almacén. */
+    /** Entrada sin tipo explícito: inventario inicial si el material aún no tiene stock en el almacén. */
     @Transactional
     public StockLevel registerEntry(UUID warehouseId, UUID materialId, BigDecimal quantity, String note) {
+        return registerEntry(warehouseId, materialId, quantity, note, null);
+    }
+
+    /**
+     * Entrada de material a un almacén activo, después del conteo de lo recibido (US40): el administrador o un
+     * encargado asignado a ese almacén.
+     *
+     * @param requestedType {@link EntryType#INITIAL}, {@link EntryType#REPLENISHMENT} o nulo (inicial si el material
+     *                      aún no tiene stock en el almacén; si no, reposición)
+     * @throws ConflictException {@code INITIAL_STOCK_ALREADY_REGISTERED} si se pide inventario inicial de un material
+     *                           que ya tiene stock en el almacén
+     */
+    @Transactional
+    public StockLevel registerEntry(UUID warehouseId, UUID materialId, BigDecimal quantity, String note,
+            EntryType requestedType) {
         TenantInfo requester = TenantContext.require();
         Site warehouse = directory.findLocation(warehouseId)
                 .filter(Site::isWarehouse)
@@ -84,11 +101,17 @@ public class StockCommandService {
         if (!material.active()) {
             throw new ConflictException("MATERIAL_INACTIVE", "El material está retirado del catálogo");
         }
+        boolean hasStock = stock.find(warehouseId, materialId).isPresent();
+        EntryType type = requestedType != null ? requestedType : hasStock ? EntryType.REPLENISHMENT : EntryType.INITIAL;
+        if (type == EntryType.INITIAL && hasStock) {
+            throw new ConflictException("INITIAL_STOCK_ALREADY_REGISTERED",
+                    "El material ya tiene inventario inicial en el almacén; registra una reposición");
+        }
         String reference = note == null || note.isBlank() ? null : note.trim();
-        StockLevel level = operations.add(warehouseId, materialId, quantity, reference);
+        StockLevel level = operations.add(warehouseId, materialId, quantity, type.movementType(), reference);
         outbox.append(InventoryEvents.STOCK_ENTRY_REGISTERED, InventoryEvents.STOCK_ITEM, level.stockItemId(),
                 new InventoryEvents.StockEntryRegistered(warehouseId, materialId, new Quantity(quantity).value(),
-                        level.availableQty(), level.reservedQty(), reference));
+                        level.availableQty(), level.reservedQty(), reference, type.name()));
         return level;
     }
 

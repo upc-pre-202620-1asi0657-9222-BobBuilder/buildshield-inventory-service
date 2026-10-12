@@ -66,7 +66,7 @@ class RoleAuthorizationTest {
 
     @BeforeEach
     void stubServices() {
-        when(commands.registerEntry(any(), any(), any(), any())).thenReturn(new StockLevel(UUID.randomUUID(),
+        when(commands.registerEntry(any(), any(), any(), any(), any())).thenReturn(new StockLevel(UUID.randomUUID(),
                 UUID.randomUUID(), BigDecimal.TEN, BigDecimal.ZERO));
         when(queries.list(any())).thenReturn(List.of());
         when(queries.listWorksites(any())).thenReturn(List.of());
@@ -97,6 +97,10 @@ class RoleAuthorizationTest {
             "GET  , /api/v1/stock/movements, , ADMINISTRATOR, 200",
             "GET  , /api/v1/stock/movements, , WAREHOUSE_MANAGER, 200",
             "GET  , /api/v1/stock/movements, , SITE_MANAGER, 200",
+            "GET  , /api/v1/stock/movements/history, , ANONYMOUS, 401",
+            "GET  , /api/v1/stock/movements/history, , ADMINISTRATOR, 200",
+            "GET  , /api/v1/stock/movements/history, , WAREHOUSE_MANAGER, 200",
+            "GET  , /api/v1/stock/movements/history, , SITE_MANAGER, 200",
     })
     void endpoint_is_allowed_only_for_its_roles(String method, String path, String body, String who, int expectedStatus)
             throws Exception {

@@ -55,6 +55,14 @@ public interface StockRepository {
     /** Movimientos de los lugares indicados, del más reciente al más antiguo; {@code materialId} es opcional. */
     List<RecordedMovement> findMovements(Collection<UUID> locationIds, UUID materialId, int limit);
 
+    /**
+     * Historial paginado de los lugares indicados, del más reciente al más antiguo (US40).
+     *
+     * @param page página desde 0
+     * @param size tamaño de la página (mayor que cero)
+     */
+    MovementPage findMovementPage(Collection<UUID> locationIds, MovementFilter filter, int page, int size);
+
     void saveReservation(StockReservation reservation);
 
     Optional<StockReservation> findReservation(UUID orderLineId);

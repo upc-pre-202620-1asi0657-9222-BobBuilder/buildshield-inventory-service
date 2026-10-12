@@ -80,6 +80,29 @@ final class StockApiExamples {
               }
             ]""";
 
+    static final String MOVEMENT_HISTORY = """
+            {
+              "items": [
+                {
+                  "id": "0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+                  "locationId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+                  "locationType": "WAREHOUSE",
+                  "locationName": "Almacén Central",
+                  "materialId": "4d5e6f7a-8b9c-4d0e-8f1a-2b3c4d5e6f7a",
+                  "sku": "CEM-001",
+                  "type": "REPLENISHMENT",
+                  "quantity": 200.000,
+                  "balanceAfter": 650.000,
+                  "reference": "Guía 001-2345",
+                  "occurredAt": "2026-11-05T09:00:00Z",
+                  "recordedBy": "9c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+                }
+              ],
+              "page": 0,
+              "size": 20,
+              "total": 37
+            }""";
+
     private StockApiExamples() {
     }
 }

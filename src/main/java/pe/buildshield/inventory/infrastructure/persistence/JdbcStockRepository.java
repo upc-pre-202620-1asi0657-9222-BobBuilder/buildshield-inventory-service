@@ -5,6 +5,8 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import pe.buildshield.inventory.domain.model.MovementFilter;
+import pe.buildshield.inventory.domain.model.MovementPage;
 import pe.buildshield.inventory.domain.model.Quantity;
 import pe.buildshield.inventory.domain.model.RecordedMovement;
 import pe.buildshield.inventory.domain.model.StockItem;
@@ -195,9 +197,51 @@ class JdbcStockRepository implements StockRepository {
                 FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id AND i.organization_id = m.organization_id
                 WHERE m.organization_id = :organizationId AND i.location_id IN (:locations)
                 """ + (materialId == null ? "" : " AND i.material_id = :materialId ") + """
-                ORDER BY m.occurred_at DESC, m.id
+                ORDER BY m.occurred_at DESC, m.seq DESC
                 LIMIT :limit
                 """, params, MOVEMENT);
+    }
+
+    @Override
+    public MovementPage findMovementPage(Collection<UUID> locationIds, MovementFilter filter, int page, int size) {
+        if (locationIds.isEmpty()) {
+            return new MovementPage(List.of(), page, size, 0);
+        }
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("organizationId", organizationId())
+                .addValue("locations", locationIds)
+                .addValue("limit", size)
+                .addValue("offset", (long) page * size);
+        StringBuilder where = new StringBuilder("""
+                FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id AND i.organization_id = m.organization_id
+                WHERE m.organization_id = :organizationId AND i.location_id IN (:locations)
+                """);
+        if (filter.materialId() != null) {
+            where.append(" AND i.material_id = :materialId");
+            params.addValue("materialId", filter.materialId());
+        }
+        if (filter.type() != null) {
+            where.append(" AND m.type = :type");
+            params.addValue("type", filter.type().name());
+        }
+        if (filter.from() != null) {
+            where.append(" AND m.occurred_at >= :from");
+            params.addValue("from", Timestamp.from(filter.from()));
+        }
+        if (filter.to() != null) {
+            where.append(" AND m.occurred_at < :to");
+            params.addValue("to", Timestamp.from(filter.to()));
+        }
+        Long total = named.queryForObject("SELECT count(*) " + where, params, Long.class);
+        List<RecordedMovement> items = named.query("""
+                SELECT m.id, i.location_id, i.material_id, m.type, m.quantity, m.balance_after, m.reference,
+                       m.occurred_at, m.recorded_by
+                """ + where + """
+
+                ORDER BY m.occurred_at DESC, m.seq DESC
+                LIMIT :limit OFFSET :offset
+                """, params, MOVEMENT);
+        return new MovementPage(items, page, size, total == null ? 0 : total);
     }
 
     @Override

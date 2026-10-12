@@ -70,8 +70,13 @@ public final class InventoryEvents {
     public record ReleasedLine(UUID orderLineId, UUID materialId, BigDecimal quantity) {
     }
 
-    /** Entrada de material a un almacén (carga de existencias). */
+    /**
+     * Entrada de material a un almacén (carga de existencias).
+     *
+     * @param entryType {@code INITIAL} (inventario inicial) o {@code REPLENISHMENT} (reposición); campo agregado en
+     *                  el Sprint 4, los consumidores que no lo conocen lo ignoran
+     */
     public record StockEntryRegistered(UUID warehouseId, UUID materialId, BigDecimal quantity,
-            BigDecimal availableAfter, BigDecimal reservedAfter, String note) {
+            BigDecimal availableAfter, BigDecimal reservedAfter, String note, String entryType) {
     }
 }

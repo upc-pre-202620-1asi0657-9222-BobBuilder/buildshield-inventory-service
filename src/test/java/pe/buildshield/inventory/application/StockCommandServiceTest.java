@@ -18,6 +18,7 @@ import pe.buildshield.inventory.application.OrderingSignals.ReceivedLine;
 import pe.buildshield.inventory.application.OrderingSignals.ReceptionReceived;
 import pe.buildshield.inventory.application.SiteDirectory.MaterialInfo;
 import pe.buildshield.inventory.application.SiteDirectory.Site;
+import pe.buildshield.inventory.domain.model.EntryType;
 import pe.buildshield.inventory.domain.model.InsufficientStockException;
 import pe.buildshield.inventory.domain.model.StockItem;
 import pe.buildshield.inventory.domain.model.StockMovement;
@@ -95,7 +96,32 @@ class StockCommandServiceTest {
         assertThat(event.quantity()).isEqualByComparingTo("100");
         assertThat(event.availableAfter()).isEqualByComparingTo("100");
         assertThat(event.note()).isEqualTo("Guía 001");
-        assertThat(stock.movements).extracting(StockMovement::type).containsExactly(StockMovement.Type.ENTRY);
+        assertThat(event.entryType()).isEqualTo("INITIAL");
+        assertThat(stock.movements).extracting(StockMovement::type).containsExactly(StockMovement.Type.INITIAL);
+    }
+
+    @Test
+    void without_an_explicit_type_the_second_entry_is_a_replenishment() {
+        service.registerEntry(central.id(), cement.id(), new BigDecimal("100"), null);
+        StockLevel level = service.registerEntry(central.id(), cement.id(), new BigDecimal("40"), "Guía 002");
+
+        assertThat(level.availableQty()).isEqualByComparingTo("140");
+        assertThat(stock.movements).extracting(StockMovement::type)
+                .containsExactly(StockMovement.Type.INITIAL, StockMovement.Type.REPLENISHMENT);
+        assertThat(stock.movements.get(1).reference()).isEqualTo("Guía 002");
+    }
+
+    @Test
+    void the_initial_stock_is_registered_only_once_and_a_replenishment_can_be_explicit() {
+        service.registerEntry(central.id(), steel.id(), new BigDecimal("5"), null, EntryType.REPLENISHMENT);
+        assertThat(stock.movements).extracting(StockMovement::type).containsExactly(StockMovement.Type.REPLENISHMENT);
+
+        assertThatThrownBy(() -> service.registerEntry(central.id(), steel.id(), BigDecimal.TEN, null,
+                EntryType.INITIAL))
+                .isInstanceOf(ConflictException.class)
+                .hasFieldOrPropertyWithValue("code", "INITIAL_STOCK_ALREADY_REGISTERED");
+        service.registerEntry(central.id(), cement.id(), BigDecimal.TEN, "Apertura", EntryType.INITIAL);
+        assertThat(item(central, cement).availableQty()).isEqualByComparingTo("10");
     }
 
     @Test

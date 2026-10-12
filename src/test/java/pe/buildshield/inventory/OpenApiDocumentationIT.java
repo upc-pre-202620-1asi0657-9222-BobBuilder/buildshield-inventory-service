@@ -31,7 +31,7 @@ class OpenApiDocumentationIT {
 
         assertThat(spec.path("paths").fieldNames()).toIterable().containsExactlyInAnyOrder(
                 "/api/v1/stock", "/api/v1/stock/entries", "/api/v1/stock/worksites", "/api/v1/stock/reservations",
-                "/api/v1/stock/movements");
+                "/api/v1/stock/movements", "/api/v1/stock/movements/history");
         assertThat(spec.at("/paths/~1api~1v1~1stock~1entries/post/responses").fieldNames()).toIterable()
                 .contains("201", "400", "403", "404", "409");
         assertThat(spec.at("/components/securitySchemes/bearer/scheme").asText()).isEqualTo("bearer");

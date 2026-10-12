@@ -49,6 +49,18 @@ public class StockOperations {
      * @throws ConcurrentStockModificationException si se agotaron los reintentos
      */
     public StockLevel deduct(UUID locationId, UUID materialId, BigDecimal requested, String reference) {
+        return deduct(locationId, materialId, requested, StockMovement.Type.DEDUCTION, reference);
+    }
+
+    /**
+     * Descuento directo de lo disponible registrado con el tipo indicado (por ejemplo, ajuste por conteo o salida
+     * de la obra por devolución).
+     *
+     * @throws InsufficientStockException          si no alcanza; no modifica nada
+     * @throws ConcurrentStockModificationException si se agotaron los reintentos
+     */
+    public StockLevel deduct(UUID locationId, UUID materialId, BigDecimal requested, StockMovement.Type type,
+            String reference) {
         Quantity quantity = new Quantity(requested);
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             Optional<StockItem> current = stock.find(locationId, materialId);
@@ -59,7 +71,7 @@ public class StockOperations {
             }
             if (stock.tryDeduct(item.id(), item.version(), quantity)) {
                 BigDecimal balance = item.availableAfterDeducting(quantity);
-                stock.record(new StockMovement(item.id(), StockMovement.Type.DEDUCTION, quantity.value(), balance,
+                stock.record(new StockMovement(item.id(), type, quantity.value(), balance,
                         reference, clock.instant()));
                 return new StockLevel(locationId, materialId, balance, item.reservedQty());
             }
@@ -155,11 +167,20 @@ public class StockOperations {
                 MAX_RETRIES + 1);
     }
 
-    /** Suma a lo disponible del lugar (almacén u obra); crea el ítem si no existía. */
+    /** Suma a lo disponible del lugar (almacén u obra) como ENTRY; crea el ítem si no existía. */
     public StockLevel add(UUID locationId, UUID materialId, BigDecimal added, String reference) {
+        return add(locationId, materialId, added, StockMovement.Type.ENTRY, reference);
+    }
+
+    /**
+     * Suma a lo disponible del lugar registrando el movimiento con el tipo indicado (inventario inicial,
+     * reposición, ajuste o reingreso por devolución); crea el ítem si no existía.
+     */
+    public StockLevel add(UUID locationId, UUID materialId, BigDecimal added, StockMovement.Type type,
+            String reference) {
         Quantity quantity = new Quantity(added);
         StockItem item = stock.add(locationId, materialId, quantity);
-        stock.record(new StockMovement(item.id(), StockMovement.Type.ENTRY, quantity.value(), item.availableQty(),
+        stock.record(new StockMovement(item.id(), type, quantity.value(), item.availableQty(),
                 reference, clock.instant()));
         return new StockLevel(locationId, materialId, item.availableQty(), item.reservedQty(), item.id());
     }

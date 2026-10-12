@@ -4,15 +4,21 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pe.buildshield.inventory.application.SiteDirectory.MaterialInfo;
 import pe.buildshield.inventory.application.SiteDirectory.Site;
+import pe.buildshield.inventory.domain.model.MovementFilter;
+import pe.buildshield.inventory.domain.model.MovementPage;
 import pe.buildshield.inventory.domain.model.RecordedMovement;
 import pe.buildshield.inventory.domain.model.StockItem;
+import pe.buildshield.inventory.domain.model.StockMovement;
 import pe.buildshield.inventory.domain.model.StockRepository;
 import pe.buildshield.inventory.domain.model.StockReservation;
+import pe.buildshield.inventory.shared.error.ErrorDetail;
+import pe.buildshield.inventory.shared.error.ValidationException;
 import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +38,7 @@ import java.util.stream.Collectors;
  *   <li>Stock de obras (lo recibido): el administrador y el encargado de almacén ven todas; el encargado de obra,
  *       las suyas.</li>
  *   <li>Reservas: el administrador, todas; el encargado de almacén, las de sus almacenes.</li>
- *   <li>Movimientos: de los almacenes y obras que el usuario ve.</li>
+ *   <li>Movimientos (últimos o historial paginado): de los almacenes y obras que el usuario ve.</li>
  * </ul>
  *
  * Lo que el usuario no ve simplemente no aparece (las listas no responden 404).
@@ -41,6 +47,7 @@ import java.util.stream.Collectors;
 public class StockQueryService {
 
     public static final int MOVEMENTS_LIMIT = 200;
+    public static final int HISTORY_MAX_SIZE = 200;
     static final String ADMINISTRATOR = "ADMINISTRATOR";
     static final String WAREHOUSE_MANAGER = "WAREHOUSE_MANAGER";
     static final String SITE_MANAGER = "SITE_MANAGER";
@@ -99,13 +106,66 @@ public class StockQueryService {
     /** Últimos movimientos de los lugares visibles; filtros opcionales por lugar y material. */
     @Transactional(readOnly = true)
     public List<MovementView> movements(UUID locationIdFilter, UUID materialId) {
-        Map<UUID, Site> sites = new LinkedHashMap<>();
-        sites.putAll(visible(directory.locations(SiteDirectory.WAREHOUSE), canSeeWarehouse(), locationIdFilter));
-        sites.putAll(visible(directory.locations(SiteDirectory.WORKSITE), canSeeWorksite(), locationIdFilter));
+        Map<UUID, Site> sites = visibleSites(locationIdFilter);
         if (sites.isEmpty()) {
             return List.of();
         }
-        List<RecordedMovement> found = stock.findMovements(sites.keySet(), materialId, MOVEMENTS_LIMIT);
+        return movementViews(stock.findMovements(sites.keySet(), materialId, MOVEMENTS_LIMIT), sites);
+    }
+
+    /**
+     * Historial paginado de movimientos de los lugares visibles (US40, T90): inventario inicial, reposiciones,
+     * reservas, salidas, recepciones en obra, ajustes por conteo y devoluciones, del más reciente al más antiguo.
+     *
+     * @param type tipo de movimiento ({@link StockMovement.Type}) o nulo para todos
+     * @param from desde (incluido), opcional
+     * @param to   hasta (excluido), opcional
+     * @param page página desde 0
+     * @param size de 1 a {@value #HISTORY_MAX_SIZE}
+     * @throws ValidationException {@code INVALID_PAGE}, {@code INVALID_MOVEMENT_TYPE} o {@code INVALID_RANGE}
+     */
+    @Transactional(readOnly = true)
+    public MovementHistoryView movementHistory(UUID locationIdFilter, UUID materialId, String type, Instant from,
+            Instant to, int page, int size) {
+        if (page < 0 || size < 1 || size > HISTORY_MAX_SIZE) {
+            throw new ValidationException("INVALID_PAGE", "La página empieza en 0 y el tamaño va de 1 a "
+                    + HISTORY_MAX_SIZE, List.of(new ErrorDetail("page", String.valueOf(page)),
+                    new ErrorDetail("size", String.valueOf(size))));
+        }
+        StockMovement.Type movementType = movementType(type);
+        if (from != null && to != null && !from.isBefore(to)) {
+            throw new ValidationException("INVALID_RANGE", "La fecha inicial debe ser anterior a la final",
+                    List.of(new ErrorDetail("from", from.toString()), new ErrorDetail("to", to.toString())));
+        }
+        Map<UUID, Site> sites = visibleSites(locationIdFilter);
+        if (sites.isEmpty()) {
+            return new MovementHistoryView(List.of(), page, size, 0);
+        }
+        MovementPage found = stock.findMovementPage(sites.keySet(),
+                new MovementFilter(materialId, movementType, from, to), page, size);
+        return new MovementHistoryView(movementViews(found.items(), sites), found.page(), found.size(), found.total());
+    }
+
+    private static StockMovement.Type movementType(String type) {
+        if (type == null || type.isBlank()) {
+            return null;
+        }
+        try {
+            return StockMovement.Type.valueOf(type.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new ValidationException("INVALID_MOVEMENT_TYPE", "Tipo de movimiento desconocido: " + type,
+                    List.of(new ErrorDetail("type", Arrays.toString(StockMovement.Type.values()))));
+        }
+    }
+
+    private Map<UUID, Site> visibleSites(UUID locationIdFilter) {
+        Map<UUID, Site> sites = new LinkedHashMap<>();
+        sites.putAll(visible(directory.locations(SiteDirectory.WAREHOUSE), canSeeWarehouse(), locationIdFilter));
+        sites.putAll(visible(directory.locations(SiteDirectory.WORKSITE), canSeeWorksite(), locationIdFilter));
+        return sites;
+    }
+
+    private List<MovementView> movementViews(List<RecordedMovement> found, Map<UUID, Site> sites) {
         Map<UUID, MaterialInfo> materials = directory.findMaterials(found.stream()
                 .map(RecordedMovement::materialId).collect(Collectors.toSet()));
         return found.stream().map(movement -> {
@@ -188,5 +248,9 @@ public class StockQueryService {
     public record MovementView(UUID id, UUID locationId, String locationType, String locationName, UUID materialId,
             String sku, String type, BigDecimal quantity, BigDecimal balanceAfter, String reference,
             Instant occurredAt, UUID recordedBy) {
+    }
+
+    /** Página del historial de movimientos. */
+    public record MovementHistoryView(List<MovementView> items, int page, int size, long total) {
     }
 }

@@ -1,5 +1,7 @@
 package pe.buildshield.inventory.support;
 
+import pe.buildshield.inventory.domain.model.MovementFilter;
+import pe.buildshield.inventory.domain.model.MovementPage;
 import pe.buildshield.inventory.domain.model.Quantity;
 import pe.buildshield.inventory.domain.model.RecordedMovement;
 import pe.buildshield.inventory.domain.model.StockItem;
@@ -119,6 +121,17 @@ public class InMemoryStockRepository implements StockRepository {
             }
         }
         return found;
+    }
+
+    @Override
+    public MovementPage findMovementPage(Collection<UUID> locationIds, MovementFilter filter, int page, int size) {
+        List<RecordedMovement> matching = findMovements(locationIds, filter.materialId(), Integer.MAX_VALUE).stream()
+                .filter(movement -> filter.type() == null || movement.type() == filter.type())
+                .filter(movement -> filter.from() == null || !movement.occurredAt().isBefore(filter.from()))
+                .filter(movement -> filter.to() == null || movement.occurredAt().isBefore(filter.to()))
+                .toList();
+        List<RecordedMovement> items = matching.stream().skip((long) page * size).limit(size).toList();
+        return new MovementPage(items, page, size, matching.size());
     }
 
     @Override

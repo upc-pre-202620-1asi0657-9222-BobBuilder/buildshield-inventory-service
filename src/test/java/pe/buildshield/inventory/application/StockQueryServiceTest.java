@@ -8,10 +8,12 @@ import pe.buildshield.inventory.application.OrderingSignals.OrderApproved;
 import pe.buildshield.inventory.application.OrderingSignals.OrderLine;
 import pe.buildshield.inventory.application.SiteDirectory.MaterialInfo;
 import pe.buildshield.inventory.application.SiteDirectory.Site;
+import pe.buildshield.inventory.application.StockQueryService.MovementHistoryView;
 import pe.buildshield.inventory.application.StockQueryService.MovementView;
 import pe.buildshield.inventory.application.StockQueryService.ReservationView;
 import pe.buildshield.inventory.application.StockQueryService.StockView;
 import pe.buildshield.inventory.application.StockQueryService.WorksiteStockView;
+import pe.buildshield.inventory.shared.error.ValidationException;
 import pe.buildshield.inventory.shared.messaging.OutboxWriter;
 import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
@@ -20,10 +22,12 @@ import pe.buildshield.inventory.support.InMemoryStockRepository;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 /** Visibilidad de cada rol en las consultas de stock, reservas y movimientos. */
@@ -155,5 +159,43 @@ class StockQueryServiceTest {
         TenantContext.set(STRANGER);
         assertThat(queries.movements(null, null)).isEmpty();
         assertThat(queries.reservations(null, null)).isEmpty();
+    }
+
+    @Test
+    void the_movement_history_is_paged_newest_first_and_filtered_by_type_and_dates() {
+        MovementHistoryView first = queries.movementHistory(null, null, null, null, null, 0, 2);
+        assertThat(first.total()).isEqualTo(3);
+        assertThat(first.items()).hasSize(2);
+        assertThat(first.page()).isZero();
+        assertThat(first.size()).isEqualTo(2);
+        assertThat(first.items().get(0).type()).isEqualTo("DISPATCH");
+        MovementHistoryView second = queries.movementHistory(null, null, null, null, null, 1, 2);
+        assertThat(second.items()).hasSize(1);
+
+        MovementHistoryView reserves = queries.movementHistory(central.id(), cement.id(), " reserve ",
+                Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600), 0, 20);
+        assertThat(reserves.items()).extracting(MovementView::type).containsExactly("RESERVE");
+        assertThat(queries.movementHistory(null, null, "", Instant.now().plusSeconds(3600), null, 0, 20).total())
+                .isZero();
+
+        TenantContext.set(STRANGER);
+        MovementHistoryView none = queries.movementHistory(null, null, null, null, null, 0, 20);
+        assertThat(none.items()).isEmpty();
+        assertThat(none.total()).isZero();
+    }
+
+    @Test
+    void the_history_rejects_invalid_pages_types_and_ranges() {
+        Instant now = Instant.now();
+        assertThatThrownBy(() -> queries.movementHistory(null, null, null, null, null, -1, 20))
+                .isInstanceOf(ValidationException.class).hasFieldOrPropertyWithValue("code", "INVALID_PAGE");
+        assertThatThrownBy(() -> queries.movementHistory(null, null, null, null, null, 0, 0))
+                .hasFieldOrPropertyWithValue("code", "INVALID_PAGE");
+        assertThatThrownBy(() -> queries.movementHistory(null, null, null, null, null, 0, 201))
+                .hasFieldOrPropertyWithValue("code", "INVALID_PAGE");
+        assertThatThrownBy(() -> queries.movementHistory(null, null, "TELEPORT", null, null, 0, 20))
+                .hasFieldOrPropertyWithValue("code", "INVALID_MOVEMENT_TYPE");
+        assertThatThrownBy(() -> queries.movementHistory(null, null, null, now, now, 0, 20))
+                .hasFieldOrPropertyWithValue("code", "INVALID_RANGE");
     }
 }
