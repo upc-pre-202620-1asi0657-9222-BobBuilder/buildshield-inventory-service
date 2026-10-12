@@ -17,12 +17,19 @@ public final class InventoryEvents {
     public static final String STOCK_RELEASED = "StockReleased";
     public static final String STOCK_ENTRY_REGISTERED = "StockEntryRegistered";
     public static final String STOCK_ADJUSTED = "StockAdjusted";
+    public static final String MATERIAL_RETURN_REQUESTED = "MaterialReturnRequested";
+    public static final String MATERIAL_RETURN_APPROVED = "MaterialReturnApproved";
+    public static final String MATERIAL_RETURN_REJECTED = "MaterialReturnRejected";
+    public static final String MATERIAL_RETURN_DISPATCHED = "MaterialReturnDispatched";
+    public static final String MATERIAL_RETURN_RECEIVED = "MaterialReturnReceived";
+    public static final String MATERIAL_RETURN_CANCELLED = "MaterialReturnCancelled";
 
     public static final String ORDER = "ORDER";
     public static final String DISPATCH = "DISPATCH";
     public static final String RECEPTION = "RECEPTION";
     public static final String STOCK_ITEM = "STOCK_ITEM";
     public static final String STOCK_COUNT = "STOCK_COUNT";
+    public static final String MATERIAL_RETURN = "MATERIAL_RETURN";
 
     /** Origen de lo recibido en obra. */
     public static final String SOURCE_PARTIAL = "PARTIAL";
@@ -90,5 +97,20 @@ public final class InventoryEvents {
     /** {@code difference} = contado menos sistema; positivo suma a lo disponible y negativo lo descuenta. */
     public record AdjustedLine(UUID materialId, BigDecimal systemQty, BigDecimal countedQty, BigDecimal difference,
             BigDecimal availableAfter) {
+    }
+
+    /**
+     * Cambio de estado de una devolución de saldos (US43): solicitada, aprobada, rechazada, en retorno, recibida o
+     * anulada. Todos los eventos de la devolución llevan este mismo payload.
+     *
+     * @param reason motivo del rechazo de la solicitud (solo en {@code MaterialReturnRejected})
+     */
+    public record MaterialReturnChanged(UUID returnId, UUID worksiteId, UUID warehouseId, String status, String reason,
+            boolean hasRejections, List<ReturnedLine> lines) {
+    }
+
+    /** {@code acceptedQty}, {@code rejectedQty} y {@code rejectionReason} solo desde la verificación del almacén. */
+    public record ReturnedLine(UUID materialId, BigDecimal quantity, BigDecimal acceptedQty, BigDecimal rejectedQty,
+            String rejectionReason) {
     }
 }

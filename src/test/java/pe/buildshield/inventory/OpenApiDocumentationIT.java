@@ -34,7 +34,12 @@ class OpenApiDocumentationIT {
                 "/api/v1/stock/movements", "/api/v1/stock/movements/history",
                 "/api/v1/stock/counts", "/api/v1/stock/counts/{countId}", "/api/v1/stock/counts/{countId}/lines",
                 "/api/v1/stock/counts/{countId}/finish", "/api/v1/stock/counts/{countId}/review",
-                "/api/v1/stock/counts/{countId}/adjustment", "/api/v1/stock/counts/{countId}/cancel");
+                "/api/v1/stock/counts/{countId}/adjustment", "/api/v1/stock/counts/{countId}/cancel",
+                "/api/v1/stock/worksites/{worksiteId}/balance", "/api/v1/stock/returns",
+                "/api/v1/stock/returns/{returnId}", "/api/v1/stock/returns/{returnId}/request",
+                "/api/v1/stock/returns/{returnId}/approve", "/api/v1/stock/returns/{returnId}/reject",
+                "/api/v1/stock/returns/{returnId}/dispatch", "/api/v1/stock/returns/{returnId}/receive",
+                "/api/v1/stock/returns/{returnId}/cancel");
         assertThat(spec.at("/paths/~1api~1v1~1stock~1entries/post/responses").fieldNames()).toIterable()
                 .contains("201", "400", "403", "404", "409");
         assertThat(spec.at("/components/securitySchemes/bearer/scheme").asText()).isEqualTo("bearer");

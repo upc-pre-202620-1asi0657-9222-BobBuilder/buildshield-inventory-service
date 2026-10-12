@@ -14,6 +14,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
+import pe.buildshield.inventory.application.MaterialReturnCommandService;
+import pe.buildshield.inventory.application.MaterialReturnQueryService;
 import pe.buildshield.inventory.application.StockCommandService;
 import pe.buildshield.inventory.application.StockCountCommandService;
 import pe.buildshield.inventory.application.StockCountQueryService;
@@ -53,7 +55,10 @@ class RoleAuthorizationTest {
             "count", "{\"warehouseId\":\"00000000-0000-0000-0000-0000000000aa\"}",
             "lines", "{\"lines\":[{\"materialId\":\"00000000-0000-0000-0000-0000000000bb\",\"countedQty\":5}]}",
             "note", "{\"note\":\"Recontado\"}",
-            "reason", "{\"reason\":\"Rotura\"}");
+            "reason", "{\"reason\":\"Rotura\"}",
+            "return", "{\"worksiteId\":\"00000000-0000-0000-0000-0000000000dd\",\"lines\":[{\"materialId\":"
+                    + "\"00000000-0000-0000-0000-0000000000bb\",\"quantity\":2}]}",
+            "verify", "{\"lines\":[{\"materialId\":\"00000000-0000-0000-0000-0000000000bb\",\"acceptedQty\":2}]}");
 
     @Autowired
     MockMvc mvc;
@@ -80,6 +85,12 @@ class RoleAuthorizationTest {
     @MockitoBean
     StockCountQueryService countQueries;
 
+    @MockitoBean
+    MaterialReturnCommandService returnCommands;
+
+    @MockitoBean
+    MaterialReturnQueryService returnQueries;
+
     @BeforeEach
     void stubServices() {
         when(commands.registerEntry(any(), any(), any(), any(), any())).thenReturn(new StockLevel(UUID.randomUUID(),
@@ -88,7 +99,7 @@ class RoleAuthorizationTest {
         when(queries.listWorksites(any())).thenReturn(List.of());
         when(queries.reservations(any(), any())).thenReturn(List.of());
         when(queries.movements(any(), any())).thenReturn(List.of());
-        // Conteos: los mocks devuelven null o listas vacías; solo importa el estado HTTP.
+        // Conteos y devoluciones: los mocks devuelven null o listas vacías; solo importa el estado HTTP.
     }
 
     @ParameterizedTest(name = "{0} {1} como {3} -> {4}")
@@ -140,6 +151,37 @@ class RoleAuthorizationTest {
             "POST , /api/v1/stock/counts/{id}/adjustment, reason, ANONYMOUS, 401",
             "POST , /api/v1/stock/counts/{id}/cancel, , WAREHOUSE_MANAGER, 200",
             "POST , /api/v1/stock/counts/{id}/cancel, , SITE_MANAGER, 403",
+            // Saldo y devoluciones (US43): lado de la obra y lado del almacén
+            "GET  , /api/v1/stock/worksites/{id}/balance, , ANONYMOUS, 401",
+            "GET  , /api/v1/stock/worksites/{id}/balance, , ADMINISTRATOR, 200",
+            "GET  , /api/v1/stock/worksites/{id}/balance, , WAREHOUSE_MANAGER, 200",
+            "GET  , /api/v1/stock/worksites/{id}/balance, , SITE_MANAGER, 200",
+            "POST , /api/v1/stock/returns, return, ANONYMOUS, 401",
+            "POST , /api/v1/stock/returns, return, ADMINISTRATOR, 201",
+            "POST , /api/v1/stock/returns, return, SITE_MANAGER, 201",
+            "POST , /api/v1/stock/returns, return, WAREHOUSE_MANAGER, 403",
+            "GET  , /api/v1/stock/returns, , ANONYMOUS, 401",
+            "GET  , /api/v1/stock/returns, , ADMINISTRATOR, 200",
+            "GET  , /api/v1/stock/returns, , WAREHOUSE_MANAGER, 200",
+            "GET  , /api/v1/stock/returns, , SITE_MANAGER, 200",
+            "GET  , /api/v1/stock/returns/{id}, , SITE_MANAGER, 200",
+            "GET  , /api/v1/stock/returns/{id}, , WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/returns/{id}/request, , SITE_MANAGER, 200",
+            "POST , /api/v1/stock/returns/{id}/request, , ADMINISTRATOR, 200",
+            "POST , /api/v1/stock/returns/{id}/request, , WAREHOUSE_MANAGER, 403",
+            "POST , /api/v1/stock/returns/{id}/approve, , WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/returns/{id}/approve, , ADMINISTRATOR, 200",
+            "POST , /api/v1/stock/returns/{id}/approve, , SITE_MANAGER, 403",
+            "POST , /api/v1/stock/returns/{id}/reject, reason, WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/returns/{id}/reject, reason, SITE_MANAGER, 403",
+            "POST , /api/v1/stock/returns/{id}/dispatch, , SITE_MANAGER, 200",
+            "POST , /api/v1/stock/returns/{id}/dispatch, , WAREHOUSE_MANAGER, 403",
+            "POST , /api/v1/stock/returns/{id}/receive, verify, WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/returns/{id}/receive, verify, ADMINISTRATOR, 200",
+            "POST , /api/v1/stock/returns/{id}/receive, verify, SITE_MANAGER, 403",
+            "POST , /api/v1/stock/returns/{id}/cancel, , SITE_MANAGER, 200",
+            "POST , /api/v1/stock/returns/{id}/cancel, , WAREHOUSE_MANAGER, 403",
+            "POST , /api/v1/stock/returns/{id}/cancel, , ANONYMOUS, 401",
     })
     void endpoint_is_allowed_only_for_its_roles(String method, String path, String body, String who, int expectedStatus)
             throws Exception {
