@@ -16,11 +16,13 @@ public final class InventoryEvents {
     public static final String STOCK_RECEIVED = "StockReceived";
     public static final String STOCK_RELEASED = "StockReleased";
     public static final String STOCK_ENTRY_REGISTERED = "StockEntryRegistered";
+    public static final String STOCK_ADJUSTED = "StockAdjusted";
 
     public static final String ORDER = "ORDER";
     public static final String DISPATCH = "DISPATCH";
     public static final String RECEPTION = "RECEPTION";
     public static final String STOCK_ITEM = "STOCK_ITEM";
+    public static final String STOCK_COUNT = "STOCK_COUNT";
 
     /** Origen de lo recibido en obra. */
     public static final String SOURCE_PARTIAL = "PARTIAL";
@@ -78,5 +80,15 @@ public final class InventoryEvents {
      */
     public record StockEntryRegistered(UUID warehouseId, UUID materialId, BigDecimal quantity,
             BigDecimal availableAfter, BigDecimal reservedAfter, String note, String entryType) {
+    }
+
+    /** Ajuste del inventario validado tras un conteo con diferencias revisadas (US41). */
+    public record StockAdjusted(UUID countId, UUID warehouseId, String reason, String reviewNote,
+            List<AdjustedLine> lines) {
+    }
+
+    /** {@code difference} = contado menos sistema; positivo suma a lo disponible y negativo lo descuenta. */
+    public record AdjustedLine(UUID materialId, BigDecimal systemQty, BigDecimal countedQty, BigDecimal difference,
+            BigDecimal availableAfter) {
     }
 }

@@ -15,6 +15,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import pe.buildshield.inventory.application.StockCommandService;
+import pe.buildshield.inventory.application.StockCountCommandService;
+import pe.buildshield.inventory.application.StockCountQueryService;
 import pe.buildshield.inventory.application.StockLevel;
 import pe.buildshield.inventory.application.StockQueryService;
 import pe.buildshield.inventory.shared.security.JwtTokenIssuer;
@@ -24,6 +26,7 @@ import pe.buildshield.inventory.support.WebSliceTest;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -42,8 +46,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebSliceTest
 class RoleAuthorizationTest {
 
-    private static final String ENTRY = "{\"warehouseId\":\"00000000-0000-0000-0000-0000000000aa\","
-            + "\"materialId\":\"00000000-0000-0000-0000-0000000000bb\",\"quantity\":10}";
+    private static final String ID = "00000000-0000-0000-0000-0000000000cc";
+    private static final Map<String, String> BODIES = Map.of(
+            "entry", "{\"warehouseId\":\"00000000-0000-0000-0000-0000000000aa\","
+                    + "\"materialId\":\"00000000-0000-0000-0000-0000000000bb\",\"quantity\":10}",
+            "count", "{\"warehouseId\":\"00000000-0000-0000-0000-0000000000aa\"}",
+            "lines", "{\"lines\":[{\"materialId\":\"00000000-0000-0000-0000-0000000000bb\",\"countedQty\":5}]}",
+            "note", "{\"note\":\"Recontado\"}",
+            "reason", "{\"reason\":\"Rotura\"}");
 
     @Autowired
     MockMvc mvc;
@@ -64,6 +74,12 @@ class RoleAuthorizationTest {
     @MockitoBean
     StockQueryService queries;
 
+    @MockitoBean
+    StockCountCommandService countCommands;
+
+    @MockitoBean
+    StockCountQueryService countQueries;
+
     @BeforeEach
     void stubServices() {
         when(commands.registerEntry(any(), any(), any(), any(), any())).thenReturn(new StockLevel(UUID.randomUUID(),
@@ -72,6 +88,7 @@ class RoleAuthorizationTest {
         when(queries.listWorksites(any())).thenReturn(List.of());
         when(queries.reservations(any(), any())).thenReturn(List.of());
         when(queries.movements(any(), any())).thenReturn(List.of());
+        // Conteos: los mocks devuelven null o listas vacías; solo importa el estado HTTP.
     }
 
     @ParameterizedTest(name = "{0} {1} como {3} -> {4}")
@@ -101,12 +118,39 @@ class RoleAuthorizationTest {
             "GET  , /api/v1/stock/movements/history, , ADMINISTRATOR, 200",
             "GET  , /api/v1/stock/movements/history, , WAREHOUSE_MANAGER, 200",
             "GET  , /api/v1/stock/movements/history, , SITE_MANAGER, 200",
+            // Conteos de validación (US41): administrador y encargado de almacén
+            "POST , /api/v1/stock/counts, count, ANONYMOUS, 401",
+            "POST , /api/v1/stock/counts, count, ADMINISTRATOR, 201",
+            "POST , /api/v1/stock/counts, count, WAREHOUSE_MANAGER, 201",
+            "POST , /api/v1/stock/counts, count, SITE_MANAGER, 403",
+            "GET  , /api/v1/stock/counts, , ANONYMOUS, 401",
+            "GET  , /api/v1/stock/counts, , WAREHOUSE_MANAGER, 200",
+            "GET  , /api/v1/stock/counts, , SITE_MANAGER, 403",
+            "GET  , /api/v1/stock/counts/{id}, , ADMINISTRATOR, 200",
+            "GET  , /api/v1/stock/counts/{id}, , SITE_MANAGER, 403",
+            "PUT  , /api/v1/stock/counts/{id}/lines, lines, WAREHOUSE_MANAGER, 200",
+            "PUT  , /api/v1/stock/counts/{id}/lines, lines, SITE_MANAGER, 403",
+            "POST , /api/v1/stock/counts/{id}/finish, , ADMINISTRATOR, 200",
+            "POST , /api/v1/stock/counts/{id}/finish, , SITE_MANAGER, 403",
+            "POST , /api/v1/stock/counts/{id}/review, note, WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/counts/{id}/review, note, SITE_MANAGER, 403",
+            "POST , /api/v1/stock/counts/{id}/adjustment, reason, ADMINISTRATOR, 200",
+            "POST , /api/v1/stock/counts/{id}/adjustment, reason, WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/counts/{id}/adjustment, reason, SITE_MANAGER, 403",
+            "POST , /api/v1/stock/counts/{id}/adjustment, reason, ANONYMOUS, 401",
+            "POST , /api/v1/stock/counts/{id}/cancel, , WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/counts/{id}/cancel, , SITE_MANAGER, 403",
     })
     void endpoint_is_allowed_only_for_its_roles(String method, String path, String body, String who, int expectedStatus)
             throws Exception {
-        MockHttpServletRequestBuilder request = "GET".equals(method) ? get(path) : post(path);
+        String uri = path.replace("{id}", ID);
+        MockHttpServletRequestBuilder request = switch (method) {
+            case "GET" -> get(uri);
+            case "PUT" -> put(uri);
+            default -> post(uri);
+        };
         if (body != null) {
-            request.contentType(MediaType.APPLICATION_JSON).content(ENTRY);
+            request.contentType(MediaType.APPLICATION_JSON).content(BODIES.get(body));
         }
         if (!"ANONYMOUS".equals(who)) {
             String token = issuer.issue(new TenantInfo(UUID.randomUUID(), UUID.randomUUID(), who)).value();
