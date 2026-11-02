@@ -1,11 +1,11 @@
 # buildshield-inventory-service
 
 Inventario de BuildShield (BobBuilder): existencias por almacén y obra, inventario inicial y reposiciones,
-reservas de stock de los pedidos aprobados, historial de movimientos, conteos físicos con ajuste, devolución
+reservas de stock de los pedidos aprobados, historial de movimientos, conteos de validación con ajuste, devolución
 de saldos de obra al almacén de origen y participación en la saga de reserva. Contrato de la arquitectura:
 `wiki/informe-tf/plan-microservicios.md` del proyecto; nombres exactos de los eventos en
-`wiki/informe-tf/notas-etapa-b1.md`. El esquema sigue `wiki/informe-avance2/er-corregido.md`; lo que no cabe en él está en
-`DESVIACIONES.md`.
+`wiki/informe-tf/notas-etapa-b1.md`. El esquema sigue `wiki/informe-avance2/er-corregido.md` con la ampliación que acordó el equipo,
+detallada en `DESVIACIONES.md`.
 
 | Dato | Valor |
 |---|---|
@@ -28,15 +28,20 @@ de saldos de obra al almacén de origen y participación en la saga de reserva. 
 - `GET /api/v1/stock/movements/history?locationId=&materialId=&type=&from=&to=&page=0&size=20`: historial paginado
   (`{items, page, size, total}`, tamaño de 1 a 200), del más reciente al más antiguo.
 
-### Conteo físico y ajuste (US41)
+### Conteo de validación y ajuste (US41)
 
-Administrador o encargado del almacén. El ERD no guarda un conteo abierto (ver `DESVIACIONES.md`).
+Administrador o encargado del almacén. Estados: `IN_PROGRESS` → `MATCHED` o `DIFFERENCES_FOUND` → `REVIEWED` →
+`ADJUSTED` (y `CANCELLED` mientras esté abierto). Un solo conteo abierto por almacén (`COUNT_ALREADY_OPEN`).
 
 | Método y ruta | Qué hace |
 |---|---|
-| `POST /api/v1/stock/counts/comparison` | compara lo contado con disponible más reservado sin guardar nada: `MATCHED` o `DIFFERENCES_FOUND` |
-| `POST /api/v1/stock/counts` | guarda un ajuste por material y aplica cada diferencia (`ADJUSTMENT_IN` u `ADJUSTMENT_OUT`) con su motivo y `StockAdjusted`: `ADJUSTED` o `MATCHED` |
-| `GET /api/v1/stock/counts?warehouseId=&materialId=` y `GET /api/v1/stock/counts/{id}` | consulta de los ajustes, una fila por material |
+| `POST /api/v1/stock/counts` | inicia el conteo; sin `materialIds`, cuenta todo lo que tiene stock en el almacén |
+| `PUT /api/v1/stock/counts/{id}/lines` | guarda o corrige lo contado |
+| `POST /api/v1/stock/counts/{id}/finish` | compara lo contado con disponible más reservado; falta algo: `COUNT_INCOMPLETE` |
+| `POST /api/v1/stock/counts/{id}/review` | deja la nota de revisión de las diferencias |
+| `POST /api/v1/stock/counts/{id}/adjustment` | aplica cada diferencia (`ADJUSTMENT_IN` u `ADJUSTMENT_OUT`) con su motivo y publica un `StockAdjusted`; sin revisión: `COUNT_NOT_REVIEWED` |
+| `POST /api/v1/stock/counts/{id}/cancel` | anula un conteo abierto sin tocar el inventario |
+| `GET /api/v1/stock/counts?warehouseId=&status=` y `GET /api/v1/stock/counts/{id}` | consulta con sus líneas |
 
 ### Saldos de obra y devolución al almacén de origen (US43)
 
@@ -53,7 +58,7 @@ comparten el despacho en `stock_movements.source_ref`.
 | `POST /api/v1/stock/returns/{id}/approve` | administrador, encargado de almacén | aprueba |
 | `POST /api/v1/stock/returns/{id}/reject` | administrador, encargado de almacén | rechaza con motivo; el saldo queda en la obra |
 | `POST /api/v1/stock/returns/{id}/dispatch` | administrador, encargado de obra | inicia el retorno: sale de la obra (`RETURN_OUT`) |
-| `POST /api/v1/stock/returns/{id}/receive` | administrador, encargado de almacén | verifica: solo lo aceptado entra al almacén (`RETURN_IN`); el motivo de lo rechazado va en el evento |
+| `POST /api/v1/stock/returns/{id}/receive` | administrador, encargado de almacén | verifica: solo lo aceptado entra al almacén (`RETURN_IN`); lo rechazado queda con su motivo |
 | `POST /api/v1/stock/returns/{id}/cancel` | administrador, encargado de obra | anula antes de aprobar |
 
 Todas las rutas están bajo `/api/v1/stock/**`, que el gateway ya enruta a inventory.
