@@ -1,0 +1,49 @@
+name: CI y despliegue
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -B verify
+
+  deploy:
+    # Sin AWS_ROLE_ARN (infra/scripts/set-github-variables.sh en buildshield-platform) solo corren las pruebas.
+    if: github.event_name == 'push' && vars.AWS_ROLE_ARN != ''
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SERVICE: inventory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Construir y subir la imagen
+        run: |
+          image="${{ steps.ecr.outputs.registry }}/${{ vars.ECS_CLUSTER }}/$SERVICE"
+          docker build -t "$image:$GITHUB_SHA" -t "$image:latest" .
+          docker push --all-tags "$image"
+      - name: Actualizar el servicio en ECS
+        run: |
+          aws ecs update-service --cluster "${{ vars.ECS_CLUSTER }}" --service "$SERVICE" --force-new-deployment > /dev/null
+          aws ecs wait services-stable --cluster "${{ vars.ECS_CLUSTER }}" --services "$SERVICE"
