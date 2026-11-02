@@ -69,15 +69,12 @@ public class OutboxPublisher {
         try {
             Integer sent = transactionTemplate.execute(status -> {
                 List<PendingEvent> pending = jdbc.query("""
-                        SELECT id, event_type, aggregate_type, aggregate_id, organization_id, actor_id, correlation_id,
-                               payload, occurred_at
+                        SELECT id, event_type, aggregate_id, correlation_id, payload
                         FROM outbox_events WHERE published_at IS NULL
                         ORDER BY occurred_at, id LIMIT ? FOR UPDATE SKIP LOCKED
                         """, (rs, row) -> new PendingEvent(rs.getObject("id", UUID.class), rs.getString("event_type"),
-                        rs.getString("aggregate_type"), rs.getString("aggregate_id"),
-                        rs.getObject("organization_id", UUID.class), rs.getObject("actor_id", UUID.class),
-                        rs.getString("correlation_id"), rs.getString("payload"),
-                        rs.getTimestamp("occurred_at").toInstant()), batchSize);
+                        rs.getString("aggregate_id"), rs.getString("correlation_id"), rs.getString("payload")),
+                        batchSize);
                 for (PendingEvent event : pending) {
                     send(event);
                     jdbc.update("UPDATE outbox_events SET published_at = ? WHERE id = ?",
@@ -94,11 +91,10 @@ public class OutboxPublisher {
     }
 
     private void send(PendingEvent event) {
+        // payload guarda el sobre completo (OutboxWriter): se reserializa para validar que sea JSON.
         String value;
         try {
-            value = json.writeValueAsString(new EventEnvelope(event.id(), event.eventType(), event.occurredAt(),
-                    event.organizationId(), event.aggregateType(), event.aggregateId(), event.actorId(),
-                    EventEnvelope.CURRENT_VERSION, json.readTree(event.payload())));
+            value = json.writeValueAsString(json.readValue(event.payload(), EventEnvelope.class));
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Evento " + event.id() + " con payload inválido", ex);
         }
@@ -117,7 +113,6 @@ public class OutboxPublisher {
         }
     }
 
-    private record PendingEvent(UUID id, String eventType, String aggregateType, String aggregateId,
-            UUID organizationId, UUID actorId, String correlationId, String payload, Instant occurredAt) {
+    private record PendingEvent(UUID id, String eventType, String aggregateId, String correlationId, String payload) {
     }
 }

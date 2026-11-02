@@ -11,6 +11,7 @@ import pe.buildshield.inventory.shared.tenant.TenantInfo;
 
 import java.sql.Timestamp;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -48,12 +49,17 @@ public class OutboxWriter {
         Objects.requireNonNull(aggregateType, "aggregateType");
         Objects.requireNonNull(aggregateId, "aggregateId");
         UUID eventId = UUID.randomUUID();
+        Instant occurredAt = clock.instant();
+        // La tabla tiene las columnas del ER de la v4 (sin aggregate_type ni actor_id): el sobre completo
+        // va en payload y el publicador lo envía tal cual.
+        EventEnvelope envelope = new EventEnvelope(eventId, eventType, occurredAt, organizationId, aggregateType,
+                aggregateId.toString(), actorId, EventEnvelope.CURRENT_VERSION, json.valueToTree(payload));
         jdbc.update("""
-                INSERT INTO outbox_events (id, event_type, aggregate_type, aggregate_id, organization_id, actor_id,
-                    correlation_id, payload, occurred_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?)
-                """, eventId, eventType, aggregateType, aggregateId.toString(), organizationId, actorId,
-                MDC.get(CorrelationId.MDC_KEY), json.valueToTree(payload).toString(), Timestamp.from(clock.instant()));
+                INSERT INTO outbox_events (id, organization_id, aggregate_id, event_type, payload, occurred_at,
+                    correlation_id)
+                VALUES (?, ?, ?, ?, CAST(? AS jsonb), ?, ?)
+                """, eventId, organizationId, UUID.fromString(aggregateId.toString()), eventType,
+                json.valueToTree(envelope).toString(), Timestamp.from(occurredAt), MDC.get(CorrelationId.MDC_KEY));
         return eventId;
     }
 }

@@ -1,6 +1,7 @@
 package pe.buildshield.inventory.infrastructure.persistence;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -13,14 +14,19 @@ import pe.buildshield.inventory.domain.model.StockItem;
 import pe.buildshield.inventory.domain.model.StockMovement;
 import pe.buildshield.inventory.domain.model.StockRepository;
 import pe.buildshield.inventory.domain.model.StockReservation;
+import pe.buildshield.inventory.domain.model.TimeOrderedId;
 import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
 
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -40,9 +46,9 @@ class JdbcStockRepository implements StockRepository {
             rs.getLong("version"));
 
     private static final String RESERVATION_COLUMNS = """
-            r.id, r.stock_item_id, i.location_id, i.material_id, r.order_id, r.order_line_id, r.quantity,
-            r.consumed_qty, r.status, r.reserved_at
-            FROM stock_reservations r JOIN stock_items i ON i.id = r.stock_item_id AND i.organization_id = r.organization_id
+            r.id, r.stock_item_id, i.location_id, i.material_id, r.order_id, r.order_line_id, r.quantity, r.status,
+            r.created_at
+            FROM stock_reservations r JOIN stock_items i ON i.id = r.stock_item_id
             """;
 
     private static final RowMapper<StockReservation> RESERVATION = (rs, rowNum) -> new StockReservation(
@@ -53,9 +59,8 @@ class JdbcStockRepository implements StockRepository {
             rs.getObject("order_id", UUID.class),
             rs.getObject("order_line_id", UUID.class),
             rs.getBigDecimal("quantity"),
-            rs.getBigDecimal("consumed_qty"),
             StockReservation.Status.valueOf(rs.getString("status")),
-            rs.getTimestamp("reserved_at").toInstant());
+            rs.getTimestamp("created_at").toInstant());
 
     private static final RowMapper<RecordedMovement> MOVEMENT = (rs, rowNum) -> new RecordedMovement(
             rs.getObject("id", UUID.class),
@@ -64,9 +69,26 @@ class JdbcStockRepository implements StockRepository {
             StockMovement.Type.valueOf(rs.getString("type")),
             rs.getBigDecimal("quantity"),
             rs.getBigDecimal("balance_after"),
-            rs.getString("reference"),
-            rs.getTimestamp("occurred_at").toInstant(),
-            rs.getObject("recorded_by", UUID.class));
+            rs.getObject("source_ref", UUID.class),
+            rs.getTimestamp("created_at").toInstant(),
+            rs.getObject("created_by", UUID.class));
+
+    /**
+     * Movimientos con el disponible que dejó cada uno: la suma acumulada por ítem, en el orden en que se registraron.
+     * El ERD no guarda ese saldo. DISPATCH sale de lo reservado y no cambia lo disponible.
+     */
+    private static final String MOVEMENTS = """
+            SELECT * FROM (
+                SELECT m.id, i.location_id, i.material_id, m.type, m.quantity, m.source_ref, m.created_at, m.created_by,
+                       SUM(CASE WHEN m.type IN ('ENTRY', 'RELEASE', 'INITIAL', 'REPLENISHMENT', 'ADJUSTMENT_IN',
+                                                'RETURN_IN') THEN m.quantity
+                                WHEN m.type = 'DISPATCH' THEN 0
+                                ELSE -m.quantity END)
+                           OVER (PARTITION BY m.stock_item_id ORDER BY m.created_at, m.id) AS balance_after
+                FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id
+                WHERE m.organization_id = :organizationId AND i.location_id IN (:locations)
+            ) m
+            """;
 
     private final JdbcTemplate jdbc;
     private final NamedParameterJdbcTemplate named;
@@ -172,13 +194,12 @@ class JdbcStockRepository implements StockRepository {
     public void record(StockMovement movement) {
         TenantInfo tenant = TenantContext.require();
         jdbc.update("""
-                        INSERT INTO stock_movements (id, organization_id, stock_item_id, type, quantity, balance_after,
-                                                     reference, occurred_at, recorded_by)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO stock_movements (id, organization_id, stock_item_id, type, quantity, source_ref,
+                                                     created_by, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                UUID.randomUUID(), tenant.organizationId(), movement.stockItemId(), movement.type().name(),
-                movement.quantity(), movement.balanceAfter(), movement.reference(),
-                Timestamp.from(movement.occurredAt()), tenant.userId());
+                TimeOrderedId.next(), tenant.organizationId(), movement.stockItemId(), movement.type().name(),
+                movement.quantity(), movement.sourceRef(), tenant.userId(), Timestamp.from(movement.createdAt()));
     }
 
     @Override
@@ -191,13 +212,8 @@ class JdbcStockRepository implements StockRepository {
                 .addValue("locations", locationIds)
                 .addValue("materialId", materialId)
                 .addValue("limit", limit);
-        return named.query("""
-                SELECT m.id, i.location_id, i.material_id, m.type, m.quantity, m.balance_after, m.reference,
-                       m.occurred_at, m.recorded_by
-                FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id AND i.organization_id = m.organization_id
-                WHERE m.organization_id = :organizationId AND i.location_id IN (:locations)
-                """ + (materialId == null ? "" : " AND i.material_id = :materialId ") + """
-                ORDER BY m.occurred_at DESC, m.seq DESC
+        return named.query(MOVEMENTS + (materialId == null ? "" : " WHERE m.material_id = :materialId ") + """
+                ORDER BY m.created_at DESC, m.id DESC
                 LIMIT :limit
                 """, params, MOVEMENT);
     }
@@ -212,12 +228,9 @@ class JdbcStockRepository implements StockRepository {
                 .addValue("locations", locationIds)
                 .addValue("limit", size)
                 .addValue("offset", (long) page * size);
-        StringBuilder where = new StringBuilder("""
-                FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id AND i.organization_id = m.organization_id
-                WHERE m.organization_id = :organizationId AND i.location_id IN (:locations)
-                """);
+        StringBuilder where = new StringBuilder(" WHERE true");
         if (filter.materialId() != null) {
-            where.append(" AND i.material_id = :materialId");
+            where.append(" AND m.material_id = :materialId");
             params.addValue("materialId", filter.materialId());
         }
         if (filter.type() != null) {
@@ -225,48 +238,70 @@ class JdbcStockRepository implements StockRepository {
             params.addValue("type", filter.type().name());
         }
         if (filter.from() != null) {
-            where.append(" AND m.occurred_at >= :from");
+            where.append(" AND m.created_at >= :from");
             params.addValue("from", Timestamp.from(filter.from()));
         }
         if (filter.to() != null) {
-            where.append(" AND m.occurred_at < :to");
+            where.append(" AND m.created_at < :to");
             params.addValue("to", Timestamp.from(filter.to()));
         }
-        Long total = named.queryForObject("SELECT count(*) " + where, params, Long.class);
-        List<RecordedMovement> items = named.query("""
-                SELECT m.id, i.location_id, i.material_id, m.type, m.quantity, m.balance_after, m.reference,
-                       m.occurred_at, m.recorded_by
-                """ + where + """
+        Long total = named.queryForObject("SELECT count(*) FROM (" + MOVEMENTS + where + ") counted", params,
+                Long.class);
+        List<RecordedMovement> items = named.query(MOVEMENTS + where + """
 
-                ORDER BY m.occurred_at DESC, m.seq DESC
+                ORDER BY m.created_at DESC, m.id DESC
                 LIMIT :limit OFFSET :offset
                 """, params, MOVEMENT);
         return new MovementPage(items, page, size, total == null ? 0 : total);
     }
 
     @Override
+    public Map<UUID, Set<UUID>> originWarehouses(UUID worksiteId, Set<UUID> materialIds) {
+        Map<UUID, Set<UUID>> origins = new HashMap<>();
+        if (materialIds.isEmpty()) {
+            return origins;
+        }
+        named.query("""
+                        SELECT DISTINCT received.material_id, origin.location_id
+                        FROM stock_movements entry
+                        JOIN stock_items received ON received.id = entry.stock_item_id
+                        JOIN stock_movements departure ON departure.organization_id = entry.organization_id
+                             AND departure.source_ref = entry.source_ref AND departure.type IN ('DISPATCH', 'DEDUCTION')
+                        JOIN stock_items origin ON origin.id = departure.stock_item_id
+                             AND origin.material_id = received.material_id
+                        WHERE entry.organization_id = :organizationId AND entry.type = 'ENTRY'
+                          AND received.location_id = :worksiteId AND received.material_id IN (:materials)
+                        """,
+                new MapSqlParameterSource("organizationId", organizationId())
+                        .addValue("worksiteId", worksiteId).addValue("materials", materialIds),
+                (RowCallbackHandler) rs -> origins
+                        .computeIfAbsent(rs.getObject("material_id", UUID.class), ignored -> new HashSet<>())
+                        .add(rs.getObject("location_id", UUID.class)));
+        return origins;
+    }
+
+    @Override
     public void saveReservation(StockReservation reservation) {
-        TenantInfo tenant = TenantContext.require();
         jdbc.update("""
                         INSERT INTO stock_reservations (id, organization_id, stock_item_id, order_id, order_line_id,
-                                                        quantity, consumed_qty, status, reserved_at, reserved_by, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                        quantity, status, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                reservation.id(), tenant.organizationId(), reservation.stockItemId(), reservation.orderId(),
-                reservation.orderLineId(), reservation.quantity(), reservation.consumedQty(), reservation.status().name(),
-                Timestamp.from(reservation.reservedAt()), tenant.userId(), Timestamp.from(clock.instant()));
+                reservation.id(), organizationId(), reservation.stockItemId(), reservation.orderId(),
+                reservation.orderLineId(), reservation.quantity(), reservation.status().name(),
+                Timestamp.from(reservation.createdAt()));
     }
 
     @Override
     public Optional<StockReservation> findReservation(UUID orderLineId) {
-        return jdbc.query("SELECT " + RESERVATION_COLUMNS + " WHERE r.organization_id = ? AND r.order_line_id = ?",
+        return jdbc.query("SELECT " + RESERVATION_COLUMNS + " WHERE r.organization_id = ? AND r.order_line_id = ? AND r.status = 'RESERVED'",
                 RESERVATION, organizationId(), orderLineId).stream().findFirst();
     }
 
     @Override
     public List<StockReservation> findReservationsByOrder(UUID orderId) {
         return jdbc.query("SELECT " + RESERVATION_COLUMNS
-                        + " WHERE r.organization_id = ? AND r.order_id = ? ORDER BY r.reserved_at, r.id",
+                        + " WHERE r.organization_id = ? AND r.order_id = ? ORDER BY r.created_at, r.id",
                 RESERVATION, organizationId(), orderId);
     }
 
@@ -277,31 +312,39 @@ class JdbcStockRepository implements StockRepository {
         }
         return named.query("SELECT " + RESERVATION_COLUMNS
                         + " WHERE r.organization_id = :organizationId AND i.location_id IN (:locations)"
-                        + " ORDER BY r.reserved_at DESC, r.id",
+                        + " ORDER BY r.created_at DESC, r.id DESC",
                 new MapSqlParameterSource("organizationId", organizationId()).addValue("locations", locationIds),
                 RESERVATION);
     }
 
     @Override
     public boolean tryConsumeReservation(UUID orderLineId, Quantity quantity) {
+        if (jdbc.update("""
+                        UPDATE stock_reservations SET status = 'CONSUMED'
+                        WHERE organization_id = ? AND order_line_id = ? AND status = 'RESERVED' AND quantity = ?
+                        """, organizationId(), orderLineId, quantity.value()) == 1) {
+            return true;
+        }
         return jdbc.update("""
-                        UPDATE stock_reservations
-                        SET consumed_qty = consumed_qty + ?,
-                            status = CASE WHEN consumed_qty + ? = quantity THEN 'CONSUMED' ELSE status END,
-                            updated_at = ?
-                        WHERE organization_id = ? AND order_line_id = ? AND status = 'RESERVED'
-                          AND quantity - consumed_qty >= ?
-                        """,
-                quantity.value(), quantity.value(), Timestamp.from(clock.instant()), organizationId(), orderLineId,
+                        WITH remaining AS (
+                            UPDATE stock_reservations SET quantity = quantity - ?
+                            WHERE organization_id = ? AND order_line_id = ? AND status = 'RESERVED' AND quantity > ?
+                            RETURNING organization_id, stock_item_id, order_id, order_line_id, created_at
+                        )
+                        INSERT INTO stock_reservations (id, organization_id, stock_item_id, order_id, order_line_id,
+                                                        quantity, status, created_at)
+                        SELECT ?, organization_id, stock_item_id, order_id, order_line_id, ?, 'CONSUMED', created_at
+                        FROM remaining
+                        """, quantity.value(), organizationId(), orderLineId, quantity.value(), TimeOrderedId.next(),
                 quantity.value()) == 1;
     }
 
     @Override
     public boolean tryMarkReleased(UUID reservationId) {
         return jdbc.update("""
-                        UPDATE stock_reservations SET status = 'RELEASED', updated_at = ?
+                        UPDATE stock_reservations SET status = 'RELEASED'
                         WHERE organization_id = ? AND id = ? AND status = 'RESERVED'
-                        """, Timestamp.from(clock.instant()), organizationId(), reservationId) == 1;
+                        """, organizationId(), reservationId) == 1;
     }
 
     private static UUID organizationId() {

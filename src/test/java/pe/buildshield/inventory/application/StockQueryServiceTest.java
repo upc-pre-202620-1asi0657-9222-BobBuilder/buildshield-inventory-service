@@ -19,7 +19,6 @@ import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
 import pe.buildshield.inventory.support.InMemorySiteDirectory;
 import pe.buildshield.inventory.support.InMemoryStockRepository;
-import pe.buildshield.inventory.support.InMemoryWorksiteSupplyRepository;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -51,6 +50,7 @@ class StockQueryServiceTest {
     private Site plaza;
     private MaterialInfo cement;
     private UUID order;
+    private UUID dispatch;
 
     @BeforeEach
     void data() {
@@ -70,15 +70,15 @@ class StockQueryServiceTest {
         stock.put(central.id(), UUID.randomUUID(), "1", "0");
         TenantContext.set(ADMIN);
         StockCommandService commands = new StockCommandService(new StockOperations(stock, Clock.systemUTC()), stock,
-                directory, mock(OutboxWriter.class), new InMemoryWorksiteSupplyRepository());
+                directory, mock(OutboxWriter.class));
         order = UUID.randomUUID();
         UUID line = UUID.randomUUID();
         commands.reserveForOrder(new OrderApproved(order, central.id(), List.of(
                 new OrderLine(line, cement.id(), new BigDecimal("40")))));
         commands.reserveForOrder(new OrderApproved(UUID.randomUUID(), callao.id(), List.of(
                 new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("10")))));
-        commands.deductForDispatch(new DispatchDeparted(UUID.randomUUID(), order, central.id(), "MAN-1",
-                List.of(new OrderLine(line, cement.id(), new BigDecimal("15")))));
+        dispatch = UUID.randomUUID();
+        commands.deductForDispatch(new DispatchDeparted(dispatch, order, central.id(), List.of(new OrderLine(line, cement.id(), new BigDecimal("15")))));
     }
 
     @AfterEach
@@ -147,7 +147,7 @@ class StockQueryServiceTest {
     void movements_list_the_newest_first_within_visible_places() {
         List<MovementView> all = queries.movements(central.id(), cement.id());
         assertThat(all).extracting(MovementView::type).containsExactly("DISPATCH", "RESERVE");
-        assertThat(all.get(0).reference()).isEqualTo("Despacho MAN-1");
+        assertThat(all.get(0).reference()).isEqualTo(dispatch.toString());
         assertThat(all.get(0).locationType()).isEqualTo("WAREHOUSE");
         assertThat(all.get(0).locationName()).isEqualTo("Almacén Central");
         assertThat(all.get(0).sku()).isEqualTo("CEM-001");

@@ -21,19 +21,17 @@ public final class OrderingSignals {
     }
 
     /** {@code DispatchDeparted}: consumir la reserva de cada línea despachada y descontar del almacén. */
-    public record DispatchDeparted(UUID dispatchId, UUID orderId, UUID warehouseId, String manifestCode,
-            List<OrderLine> lines) {
+    public record DispatchDeparted(UUID dispatchId, UUID orderId, UUID warehouseId, List<OrderLine> lines) {
     }
 
     /**
      * {@code ReceptionPartiallyReceived} o {@code ReceptionConfirmed}: sumar a la obra solo el
      * {@code deltaQuantity} de cada línea.
      *
-     * @param warehouseId almacén de origen del despacho (nulo si el evento no lo trae); se guarda para devolver
-     *                    el saldo a ese almacén (US43)
+     * @param dispatchId despacho recibido; queda en el movimiento y enlaza lo recibido con el almacén de origen (US43)
      * @param source      {@link InventoryEvents#SOURCE_PARTIAL} o {@link InventoryEvents#SOURCE_CONFIRMATION}
      */
-    public record ReceptionReceived(UUID receptionId, UUID dispatchId, UUID worksiteId, UUID warehouseId, String source,
+    public record ReceptionReceived(UUID receptionId, UUID dispatchId, UUID worksiteId, String source,
             List<ReceivedLine> lines) {
     }
 

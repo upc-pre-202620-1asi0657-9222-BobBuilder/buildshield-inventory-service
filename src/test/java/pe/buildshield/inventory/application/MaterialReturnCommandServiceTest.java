@@ -26,7 +26,6 @@ import pe.buildshield.inventory.shared.tenant.TenantInfo;
 import pe.buildshield.inventory.support.InMemoryMaterialReturnRepository;
 import pe.buildshield.inventory.support.InMemorySiteDirectory;
 import pe.buildshield.inventory.support.InMemoryStockRepository;
-import pe.buildshield.inventory.support.InMemoryWorksiteSupplyRepository;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -57,13 +56,12 @@ class MaterialReturnCommandServiceTest {
 
     private final InMemoryStockRepository stock = new InMemoryStockRepository();
     private final InMemoryMaterialReturnRepository returns = new InMemoryMaterialReturnRepository();
-    private final InMemoryWorksiteSupplyRepository supplies = new InMemoryWorksiteSupplyRepository();
     private final InMemorySiteDirectory directory = new InMemorySiteDirectory();
     private final OutboxWriter outbox = mock(OutboxWriter.class);
     private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-    private final MaterialReturnCommandService service = new MaterialReturnCommandService(returns, supplies, stock,
+    private final MaterialReturnCommandService service = new MaterialReturnCommandService(returns, stock,
             new StockOperations(stock, clock), directory, outbox, clock);
-    private final MaterialReturnQueryService queries = new MaterialReturnQueryService(returns, supplies, stock,
+    private final MaterialReturnQueryService queries = new MaterialReturnQueryService(returns, stock,
             directory);
 
     private Site central;
@@ -88,9 +86,9 @@ class MaterialReturnCommandServiceTest {
         stock.put(central.id(), cement.id(), "100", "0");
         stock.put(torre.id(), cement.id(), "30", "0");
         stock.put(torre.id(), steel.id(), "8", "0");
-        supplies.recordSupply(torre.id(), cement.id(), central.id(), new BigDecimal("30"));
-        supplies.recordSupply(torre.id(), steel.id(), central.id(), new BigDecimal("5"));
-        supplies.recordSupply(torre.id(), steel.id(), callao.id(), new BigDecimal("3"));
+        stock.supplied(torre.id(), cement.id(), central.id());
+        stock.supplied(torre.id(), steel.id(), central.id());
+        stock.supplied(torre.id(), steel.id(), callao.id());
         TenantContext.set(JUAN);
     }
 
@@ -102,7 +100,7 @@ class MaterialReturnCommandServiceTest {
     @Test
     void the_full_return_reincorporates_only_what_the_warehouse_accepts() {
         MaterialReturn registered = service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), new BigDecimal("12"), "2 con humedad")), "Saldo del piso 12");
+                new DeclaredLine(cement.id(), new BigDecimal("12"))));
         assertThat(registered.warehouseId()).isEqualTo(central.id());
         assertThat(registered.status()).isEqualTo(MaterialReturn.Status.REGISTERED);
 
@@ -153,7 +151,7 @@ class MaterialReturnCommandServiceTest {
     @Test
     void a_rejected_request_leaves_the_balance_at_the_worksite() {
         MaterialReturn materialReturn = service.register(torre.id(), central.id(), List.of(
-                new DeclaredLine(cement.id(), new BigDecimal("30"), null)), null);
+                new DeclaredLine(cement.id(), new BigDecimal("30"))));
         service.request(materialReturn.id());
         TenantContext.set(ROSA);
         MaterialReturn rejected = service.reject(materialReturn.id(), "El cemento se usará en la losa");
@@ -164,19 +162,18 @@ class MaterialReturnCommandServiceTest {
         verify(outbox).append(eq(InventoryEvents.MATERIAL_RETURN_REJECTED), eq(InventoryEvents.MATERIAL_RETURN),
                 eq(materialReturn.id()), org.mockito.ArgumentMatchers.any());
         TenantContext.set(JUAN);
-        assertThat(service.register(torre.id(), null, List.of(new DeclaredLine(cement.id(), new BigDecimal("30"),
-                null)), null).status()).isEqualTo(MaterialReturn.Status.REGISTERED);
+        assertThat(service.register(torre.id(), null, List.of(new DeclaredLine(cement.id(), new BigDecimal("30")))).status()).isEqualTo(MaterialReturn.Status.REGISTERED);
     }
 
     @Test
     void the_declared_balance_cannot_exceed_what_remains_after_pending_returns() {
-        service.register(torre.id(), null, List.of(new DeclaredLine(cement.id(), new BigDecimal("20"), null)), null);
+        service.register(torre.id(), null, List.of(new DeclaredLine(cement.id(), new BigDecimal("20"))));
 
         assertThatThrownBy(() -> service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), new BigDecimal("11"), null)), null))
+                new DeclaredLine(cement.id(), new BigDecimal("11")))))
                 .isInstanceOf(ConflictException.class).hasFieldOrPropertyWithValue("code", "RETURN_EXCEEDS_BALANCE");
         MaterialReturn second = service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), new BigDecimal("10"), null)), null);
+                new DeclaredLine(cement.id(), new BigDecimal("10"))));
         stock.put(torre.id(), cement.id(), "25", "0");
         assertThatThrownBy(() -> service.request(second.id())).isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("code", "RETURN_EXCEEDS_BALANCE");
@@ -185,64 +182,62 @@ class MaterialReturnCommandServiceTest {
     @Test
     void the_origin_warehouse_is_resolved_from_what_the_worksite_received() {
         assertThatThrownBy(() -> service.register(torre.id(), null, List.of(
-                new DeclaredLine(steel.id(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(steel.id(), BigDecimal.ONE))))
                 .isInstanceOf(ValidationException.class).hasFieldOrPropertyWithValue("code", "ORIGIN_WAREHOUSE_REQUIRED");
-        assertThat(service.register(torre.id(), callao.id(), List.of(new DeclaredLine(steel.id(), BigDecimal.ONE,
-                null)), null).warehouseId()).isEqualTo(callao.id());
+        assertThat(service.register(torre.id(), callao.id(), List.of(new DeclaredLine(steel.id(), BigDecimal.ONE))).warehouseId()).isEqualTo(callao.id());
         assertThatThrownBy(() -> service.register(torre.id(), callao.id(), List.of(
-                new DeclaredLine(cement.id(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(cement.id(), BigDecimal.ONE))))
                 .isInstanceOf(ConflictException.class).hasFieldOrPropertyWithValue("code", "NOT_SUPPLIED_BY_WAREHOUSE");
         MaterialInfo sand = directory.material("ARE-001", true);
         stock.put(torre.id(), sand.id(), "4", "0");
         assertThatThrownBy(() -> service.register(torre.id(), null, List.of(
-                new DeclaredLine(sand.id(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(sand.id(), BigDecimal.ONE))))
                 .isInstanceOf(ConflictException.class).hasFieldOrPropertyWithValue("code", "ORIGIN_WAREHOUSE_UNKNOWN");
         MaterialInfo brick = directory.material("LAD-001", true);
         stock.put(torre.id(), brick.id(), "100", "0");
-        supplies.recordSupply(torre.id(), brick.id(), callao.id(), new BigDecimal("100"));
+        stock.supplied(torre.id(), brick.id(), callao.id());
         assertThatThrownBy(() -> service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), BigDecimal.ONE, null), new DeclaredLine(brick.id(), BigDecimal.ONE, null)),
-                null)).isInstanceOf(ConflictException.class)
+                new DeclaredLine(cement.id(), BigDecimal.ONE), new DeclaredLine(brick.id(), BigDecimal.ONE)))).isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("code", "NO_COMMON_ORIGIN_WAREHOUSE");
     }
 
     @Test
     void worksites_warehouses_and_materials_are_validated() {
         assertThatThrownBy(() -> service.register(plaza.id(), null, List.of(
-                new DeclaredLine(cement.id(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(cement.id(), BigDecimal.ONE))))
                 .isInstanceOf(ResourceNotFoundException.class).hasFieldOrPropertyWithValue("code", "WORKSITE_NOT_FOUND");
         assertThatThrownBy(() -> service.register(central.id(), null, List.of(
-                new DeclaredLine(cement.id(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(cement.id(), BigDecimal.ONE))))
                 .isInstanceOf(ResourceNotFoundException.class);
-        assertThatThrownBy(() -> service.register(torre.id(), null, List.of(), null))
+        assertThatThrownBy(() -> service.register(torre.id(), null, List.of()))
                 .isInstanceOf(ValidationException.class).hasFieldOrPropertyWithValue("code", "RETURN_WITHOUT_LINES");
-        assertThatThrownBy(() -> service.register(torre.id(), null, null, null))
+        assertThatThrownBy(() -> service.register(torre.id(), null, null))
                 .isInstanceOf(ValidationException.class);
         assertThatThrownBy(() -> service.register(torre.id(), null, List.of(
-                new DeclaredLine(UUID.randomUUID(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(UUID.randomUUID(), BigDecimal.ONE))))
                 .isInstanceOf(ResourceNotFoundException.class).hasFieldOrPropertyWithValue("code", "MATERIAL_NOT_FOUND");
         assertThatThrownBy(() -> service.register(torre.id(), torre.id(), List.of(
-                new DeclaredLine(cement.id(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(cement.id(), BigDecimal.ONE))))
                 .isInstanceOf(ConflictException.class).hasFieldOrPropertyWithValue("code", "NOT_SUPPLIED_BY_WAREHOUSE");
 
         Site closed = directory.warehouse("Almacén Cerrado", false);
         MaterialInfo sand = directory.material("ARE-001", true);
         stock.put(torre.id(), sand.id(), "4", "0");
-        supplies.recordSupply(torre.id(), sand.id(), closed.id(), new BigDecimal("4"));
+        stock.supplied(torre.id(), sand.id(), closed.id());
         assertThatThrownBy(() -> service.register(torre.id(), null, List.of(
-                new DeclaredLine(sand.id(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(sand.id(), BigDecimal.ONE))))
                 .isInstanceOf(ConflictException.class).hasFieldOrPropertyWithValue("code", "SITE_INACTIVE");
         UUID ghost = UUID.randomUUID();
-        supplies.recordSupply(torre.id(), sand.id(), ghost, BigDecimal.ONE);
+        stock.supplied(torre.id(), sand.id(), ghost);
         assertThatThrownBy(() -> service.register(torre.id(), ghost, List.of(
-                new DeclaredLine(sand.id(), BigDecimal.ONE, null)), null))
+                new DeclaredLine(sand.id(), BigDecimal.ONE))))
                 .isInstanceOf(ResourceNotFoundException.class).hasFieldOrPropertyWithValue("code", "WAREHOUSE_NOT_FOUND");
     }
 
     @Test
     void each_side_does_only_its_own_steps() {
         MaterialReturn materialReturn = service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), BigDecimal.ONE, null)), null);
+                new DeclaredLine(cement.id(), BigDecimal.ONE)));
         TenantContext.set(ROSA);
         assertThatThrownBy(() -> service.request(materialReturn.id())).isInstanceOf(ForbiddenException.class)
                 .hasFieldOrPropertyWithValue("code", "RETURN_FORBIDDEN");
@@ -268,21 +263,20 @@ class MaterialReturnCommandServiceTest {
     @Test
     void the_site_cancels_a_request_and_its_balance_is_free_again() {
         MaterialReturn materialReturn = service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), new BigDecimal("30"), null)), null);
+                new DeclaredLine(cement.id(), new BigDecimal("30"))));
         service.request(materialReturn.id());
         MaterialReturn cancelled = service.cancel(materialReturn.id());
 
         assertThat(cancelled.status()).isEqualTo(MaterialReturn.Status.CANCELLED);
         verify(outbox).append(eq(InventoryEvents.MATERIAL_RETURN_CANCELLED), eq(InventoryEvents.MATERIAL_RETURN),
                 eq(materialReturn.id()), org.mockito.ArgumentMatchers.any());
-        assertThat(service.register(torre.id(), null, List.of(new DeclaredLine(cement.id(), new BigDecimal("30"),
-                null)), null)).isNotNull();
+        assertThat(service.register(torre.id(), null, List.of(new DeclaredLine(cement.id(), new BigDecimal("30"))))).isNotNull();
     }
 
     @Test
     void the_worksite_must_still_have_the_material_when_the_return_leaves() {
         MaterialReturn materialReturn = service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), new BigDecimal("30"), null)), null);
+                new DeclaredLine(cement.id(), new BigDecimal("30"))));
         service.request(materialReturn.id());
         TenantContext.set(ROSA);
         service.approve(materialReturn.id());
@@ -295,7 +289,7 @@ class MaterialReturnCommandServiceTest {
     @Test
     void a_stale_copy_is_rejected() {
         MaterialReturn materialReturn = service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), BigDecimal.ONE, null)), null);
+                new DeclaredLine(cement.id(), BigDecimal.ONE)));
         MaterialReturnCommandService racing = new MaterialReturnCommandService(new InMemoryMaterialReturnRepository() {
             @Override
             public java.util.Optional<MaterialReturn> find(UUID returnId) {
@@ -312,7 +306,7 @@ class MaterialReturnCommandServiceTest {
             public boolean update(MaterialReturn changed) {
                 return false;
             }
-        }, supplies, stock, new StockOperations(stock, clock), directory, outbox, clock);
+        }, stock, new StockOperations(stock, clock), directory, outbox, clock);
 
         assertThatThrownBy(() -> racing.request(materialReturn.id())).isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("code", "RETURN_MODIFIED");
@@ -320,7 +314,7 @@ class MaterialReturnCommandServiceTest {
 
     @Test
     void the_balance_shows_what_can_still_be_returned_and_where_it_came_from() {
-        service.register(torre.id(), null, List.of(new DeclaredLine(cement.id(), new BigDecimal("12"), null)), null);
+        service.register(torre.id(), null, List.of(new DeclaredLine(cement.id(), new BigDecimal("12"))));
         stock.put(torre.id(), UUID.randomUUID(), "1", "0");
         stock.put(torre.id(), directory.material("ZZZ-000", true).id(), "0", "0");
 
@@ -351,9 +345,9 @@ class MaterialReturnCommandServiceTest {
     @Test
     void each_role_lists_the_returns_of_its_places() {
         MaterialReturn toCentral = service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), BigDecimal.ONE, "detalle")), null);
+                new DeclaredLine(cement.id(), BigDecimal.ONE)));
         MaterialReturn toCallao = service.register(torre.id(), callao.id(), List.of(
-                new DeclaredLine(steel.id(), BigDecimal.ONE, null)), null);
+                new DeclaredLine(steel.id(), BigDecimal.ONE)));
         service.request(toCallao.id());
 
         assertThat(queries.list(null, null, null)).extracting(ReturnView::id)
@@ -381,13 +375,12 @@ class MaterialReturnCommandServiceTest {
         assertThat(view.warehouseName()).isEqualTo("Almacén Central");
         assertThat(view.status()).isEqualTo("REGISTERED");
         assertThat(view.lines().get(0).sku()).isEqualTo("CEM-001");
-        assertThat(view.lines().get(0).detail()).isEqualTo("detalle");
         assertThat(view.hasRejections()).isFalse();
     }
 
     private MaterialReturn inTransit(BigDecimal quantity) {
         MaterialReturn materialReturn = service.register(torre.id(), null, List.of(
-                new DeclaredLine(cement.id(), quantity, null)), null);
+                new DeclaredLine(cement.id(), quantity)));
         service.request(materialReturn.id());
         TenantContext.set(ROSA);
         service.approve(materialReturn.id());

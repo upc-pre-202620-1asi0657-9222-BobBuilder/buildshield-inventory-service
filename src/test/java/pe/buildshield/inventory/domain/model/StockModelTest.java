@@ -53,11 +53,36 @@ class StockModelTest {
     }
 
     @Test
-    void a_movement_cannot_leave_negative_stock() {
-        assertThatThrownBy(() -> new StockMovement(ID, StockMovement.Type.DEDUCTION, BigDecimal.TEN,
-                new BigDecimal("-1"), null, Instant.now())).isInstanceOf(IllegalStateException.class);
-        assertThat(new StockMovement(ID, StockMovement.Type.ENTRY, BigDecimal.TEN, BigDecimal.TEN, "Guía 1",
-                Instant.now()).type()).isEqualTo(StockMovement.Type.ENTRY);
+    void a_movement_keeps_what_originated_it() {
+        assertThat(new StockMovement(ID, StockMovement.Type.ENTRY, BigDecimal.TEN, ID, Instant.now()).sourceRef())
+                .isEqualTo(ID);
+        assertThat(new StockMovement(ID, StockMovement.Type.INITIAL, BigDecimal.TEN, null, Instant.now()).sourceRef())
+                .isNull();
+    }
+
+    @Test
+    void time_ordered_ids_grow_in_the_order_they_are_generated() {
+        UUID previous = TimeOrderedId.next();
+        for (int i = 0; i < 10_000; i++) {
+            UUID next = TimeOrderedId.next();
+            assertThat(next.version()).isEqualTo(7);
+            assertThat(next.toString()).isGreaterThan(previous.toString());
+            previous = next;
+        }
+    }
+
+    @Test
+    void an_adjustment_compares_what_was_counted_with_the_system() {
+        StockAdjustment adjustment = new StockAdjustment(ID, ID, ID, ID, new BigDecimal("445"), new BigDecimal("450"),
+                "Rotura", ID, Instant.now());
+        assertThat(adjustment.difference()).isEqualByComparingTo("-5");
+        assertThat(StockAdjustment.countedQuantity(new BigDecimal("2.5"))).isEqualTo(new BigDecimal("2.500"));
+        assertThatThrownBy(() -> StockAdjustment.countedQuantity(new BigDecimal("-1")))
+                .hasFieldOrPropertyWithValue("code", "INVALID_COUNTED_QUANTITY");
+        assertThatThrownBy(() -> StockAdjustment.countedQuantity(new BigDecimal("1.0001")))
+                .hasFieldOrPropertyWithValue("code", "INVALID_COUNTED_QUANTITY");
+        assertThatThrownBy(() -> StockAdjustment.countedQuantity(null))
+                .hasFieldOrPropertyWithValue("code", "INVALID_COUNTED_QUANTITY");
     }
 
     @Test
@@ -70,15 +95,14 @@ class StockModelTest {
         assertThat(reservation.isReleasable()).isTrue();
 
         assertThat(reservation.status()).isEqualTo(StockReservation.Status.RESERVED);
-        assertThat(reservation.remaining()).isEqualByComparingTo("10");
         assertThat(reservation.canConsume(Quantity.of("10"))).isTrue();
         assertThat(reservation.canConsume(Quantity.of("10.001"))).isFalse();
-        assertThatThrownBy(() -> new StockReservation(ID, ID, ID, ID, ID, ID, BigDecimal.ONE, BigDecimal.TEN,
+        assertThatThrownBy(() -> new StockReservation(ID, ID, ID, ID, ID, ID, BigDecimal.ZERO,
                 StockReservation.Status.RESERVED, Instant.now())).isInstanceOf(IllegalStateException.class);
-        assertThat(new StockReservation(ID, ID, ID, ID, ID, ID, BigDecimal.ONE, BigDecimal.ZERO,
+        assertThat(new StockReservation(ID, ID, ID, ID, ID, ID, BigDecimal.ONE,
                 StockReservation.Status.CONSUMED, Instant.now()).canConsume(Quantity.of("1"))).isFalse();
-        assertThat(new StockReservation(ID, ID, ID, ID, ID, ID, BigDecimal.ONE, BigDecimal.ONE,
-                StockReservation.Status.RESERVED, Instant.now()).isReleasable()).isFalse();
+        assertThat(new StockReservation(ID, ID, ID, ID, ID, ID, BigDecimal.ONE,
+                StockReservation.Status.CONSUMED, Instant.now()).isReleasable()).isFalse();
     }
 
     @Test

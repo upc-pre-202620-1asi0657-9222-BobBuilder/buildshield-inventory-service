@@ -9,7 +9,6 @@ import pe.buildshield.inventory.domain.model.MaterialReturnLine;
 import pe.buildshield.inventory.domain.model.MaterialReturnRepository;
 import pe.buildshield.inventory.domain.model.StockItem;
 import pe.buildshield.inventory.domain.model.StockRepository;
-import pe.buildshield.inventory.domain.model.WorksiteSupplyRepository;
 import pe.buildshield.inventory.shared.error.ResourceNotFoundException;
 import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
@@ -44,14 +43,12 @@ import static pe.buildshield.inventory.application.MaterialReturnCommandService.
 public class MaterialReturnQueryService {
 
     private final MaterialReturnRepository returns;
-    private final WorksiteSupplyRepository supplies;
     private final StockRepository stock;
     private final SiteDirectory directory;
 
-    public MaterialReturnQueryService(MaterialReturnRepository returns, WorksiteSupplyRepository supplies,
-            StockRepository stock, SiteDirectory directory) {
+    public MaterialReturnQueryService(MaterialReturnRepository returns, StockRepository stock,
+            SiteDirectory directory) {
         this.returns = returns;
-        this.supplies = supplies;
         this.stock = stock;
         this.directory = directory;
     }
@@ -128,7 +125,7 @@ public class MaterialReturnQueryService {
         }
         Set<UUID> materialIds = items.stream().map(StockItem::materialId).collect(Collectors.toSet());
         Map<UUID, MaterialInfo> materials = directory.findMaterials(materialIds);
-        Map<UUID, Set<UUID>> origins = supplies.originWarehouses(worksiteId, materialIds);
+        Map<UUID, Set<UUID>> origins = stock.originWarehouses(worksiteId, materialIds);
         Map<UUID, String> names = new HashMap<>();
         List<BalanceLineView> lines = items.stream()
                 .filter(item -> materials.containsKey(item.materialId()))
@@ -156,17 +153,13 @@ public class MaterialReturnQueryService {
         Map<UUID, String> names = new HashMap<>();
         return found.stream().map(materialReturn -> new ReturnView(materialReturn.id(), materialReturn.worksiteId(),
                 name(materialReturn.worksiteId(), names), materialReturn.warehouseId(),
-                name(materialReturn.warehouseId(), names), materialReturn.status().name(), materialReturn.note(),
+                name(materialReturn.warehouseId(), names), materialReturn.status().name(),
                 materialReturn.hasRejections(), materialReturn.registeredBy(), materialReturn.registeredAt(),
-                materialReturn.requestedBy(), materialReturn.requestedAt(), materialReturn.decidedBy(),
-                materialReturn.decidedAt(), materialReturn.rejectionReason(), materialReturn.dispatchedBy(),
-                materialReturn.dispatchedAt(), materialReturn.receivedBy(), materialReturn.receivedAt(),
-                materialReturn.cancelledAt(), materialReturn.lines().stream().map(line -> {
+                materialReturn.lines().stream().map(line -> {
                     MaterialInfo material = materials.get(line.materialId());
                     return new ReturnLineView(line.id(), line.materialId(), material == null ? null : material.sku(),
                             material == null ? null : material.name(), material == null ? null : material.unit(),
-                            line.quantity(), line.detail(), line.acceptedQty(), line.rejectedQty(),
-                            line.rejectionReason());
+                            line.quantity(), line.acceptedQty(), line.rejectedQty());
                 }).toList())).toList();
     }
 
@@ -185,16 +178,13 @@ public class MaterialReturnQueryService {
 
     /** Devolución de saldos con sus líneas. */
     public record ReturnView(UUID id, UUID worksiteId, String worksiteName, UUID warehouseId, String warehouseName,
-            String status, String note, boolean hasRejections, UUID registeredBy, Instant registeredAt,
-            UUID requestedBy, Instant requestedAt, UUID decidedBy, Instant decidedAt, String rejectionReason,
-            UUID dispatchedBy, Instant dispatchedAt, UUID receivedBy, Instant receivedAt, Instant cancelledAt,
+            String status, boolean hasRejections, UUID registeredBy, Instant registeredAt,
             List<ReturnLineView> lines) {
     }
 
-    /** Lo aceptado y lo rechazado (con su motivo) solo desde la verificación del almacén. */
+    /** Lo aceptado y lo rechazado solo desde la verificación del almacén. */
     public record ReturnLineView(UUID id, UUID materialId, String sku, String materialName, String unit,
-            BigDecimal quantity, String detail, BigDecimal acceptedQty, BigDecimal rejectedQty,
-            String rejectionReason) {
+            BigDecimal quantity, BigDecimal acceptedQty, BigDecimal rejectedQty) {
     }
 
     /** Saldo restante de una obra. */

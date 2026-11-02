@@ -16,7 +16,8 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Devolución del saldo de una obra a su almacén de origen (US43, T92). Agregado con este ciclo de vida:
+ * Devolución del saldo de una obra a su almacén de origen (US43, T92), en las tablas {@code balance_returns} y
+ * {@code balance_return_lines}. Agregado con este ciclo de vida:
  *
  * <pre>
  * REGISTERED --solicitar--> REQUESTED --aprobar--> APPROVED --iniciar retorno--> IN_TRANSIT --verificar--> RECEIVED
@@ -28,9 +29,10 @@ import java.util.UUID;
  *   <li>El encargado de obra registra y detalla el saldo (lo que quedó sin usar) y después solicita la
  *       devolución.</li>
  *   <li>El almacén de origen la aprueba o la rechaza con un motivo; el rechazo deja el saldo en la obra.</li>
- *   <li>Al iniciar el retorno el material sale de la obra; al verificarlo, el almacén reincorpora solo lo aceptado
- *       y registra lo rechazado de cada línea con su motivo.</li>
+ *   <li>Al iniciar el retorno el material sale de la obra; al verificarlo, el almacén reincorpora solo lo aceptado.</li>
  * </ul>
+ *
+ * <p>Los motivos de rechazo no tienen columna en el ERD: se exigen y viajan en el evento del cambio de estado.
  */
 public class MaterialReturn {
 
@@ -39,32 +41,21 @@ public class MaterialReturn {
     /** Estados en los que el saldo declarado sigue comprometido en la obra (no se puede volver a devolver). */
     public static final Set<Status> PENDING = Set.of(Status.REGISTERED, Status.REQUESTED, Status.APPROVED);
 
-    public static final int NOTE_MAX = 500;
-    public static final int DETAIL_MAX = 200;
+    public static final int REASON_MAX = 500;
+    public static final int LINE_REASON_MAX = 200;
 
     private final UUID id;
     private final UUID worksiteId;
     private final UUID warehouseId;
-    private final String note;
     private final UUID registeredBy;
     private final Instant registeredAt;
     private final List<MaterialReturnLine> lines;
-    private final long version;
+    private final Status persistedStatus;
     private Status status;
-    private UUID requestedBy;
-    private Instant requestedAt;
-    private UUID decidedBy;
-    private Instant decidedAt;
     private String rejectionReason;
-    private UUID dispatchedBy;
-    private Instant dispatchedAt;
-    private UUID receivedBy;
-    private Instant receivedAt;
-    private UUID cancelledBy;
-    private Instant cancelledAt;
 
     /** Lo que declara la obra por material al registrar el saldo. */
-    public record DeclaredLine(UUID materialId, BigDecimal quantity, String detail) {
+    public record DeclaredLine(UUID materialId, BigDecimal quantity) {
     }
 
     /** Lo que el almacén acepta de un material al verificar; {@code reason} es obligatorio si no acepta todo. */
@@ -72,17 +63,16 @@ public class MaterialReturn {
     }
 
     /** Reconstrucción desde la base (o tras crearla). */
-    public MaterialReturn(UUID id, UUID worksiteId, UUID warehouseId, Status status, String note, UUID registeredBy,
-            Instant registeredAt, List<MaterialReturnLine> lines, long version) {
+    public MaterialReturn(UUID id, UUID worksiteId, UUID warehouseId, Status status, UUID registeredBy,
+            Instant registeredAt, List<MaterialReturnLine> lines) {
         this.id = Objects.requireNonNull(id, "id");
         this.worksiteId = Objects.requireNonNull(worksiteId, "worksiteId");
         this.warehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
         this.status = Objects.requireNonNull(status, "status");
-        this.note = note;
+        this.persistedStatus = status;
         this.registeredBy = Objects.requireNonNull(registeredBy, "registeredBy");
         this.registeredAt = Objects.requireNonNull(registeredAt, "registeredAt");
         this.lines = new ArrayList<>(Objects.requireNonNull(lines, "lines"));
-        this.version = version;
         if (this.lines.isEmpty()) {
             throw new IllegalStateException("Una devolución tiene al menos un material");
         }
@@ -93,8 +83,8 @@ public class MaterialReturn {
      *
      * @throws ValidationException {@code RETURN_WITHOUT_LINES}, {@code DUPLICATED_MATERIAL} o una cantidad inválida
      */
-    public static MaterialReturn register(UUID worksiteId, UUID warehouseId, List<DeclaredLine> declared, String note,
-            UUID by, Instant now) {
+    public static MaterialReturn register(UUID worksiteId, UUID warehouseId, List<DeclaredLine> declared, UUID by,
+            Instant now) {
         if (declared == null || declared.isEmpty()) {
             throw new ValidationException("RETURN_WITHOUT_LINES", "Detalla al menos un material del saldo");
         }
@@ -106,45 +96,35 @@ public class MaterialReturn {
                 throw new ValidationException("DUPLICATED_MATERIAL", "Cada material va una sola vez en el saldo",
                         List.of(new ErrorDetail("materialId", line.materialId().toString())));
             }
-            lines.add(new MaterialReturnLine(UUID.randomUUID(), line.materialId(), new Quantity(line.quantity()).value(),
-                    StockCount.clean(line.detail(), DETAIL_MAX, "detail"), null, null, null));
+            lines.add(new MaterialReturnLine(TimeOrderedId.next(), line.materialId(),
+                    new Quantity(line.quantity()).value(), null, null));
         }
-        return new MaterialReturn(UUID.randomUUID(), worksiteId, warehouseId, Status.REGISTERED,
-                StockCount.clean(note, NOTE_MAX, "note"), by, now, lines, 0);
+        return new MaterialReturn(TimeOrderedId.next(), worksiteId, warehouseId, Status.REGISTERED, by, now, lines);
     }
 
     /** La obra solicita la devolución del saldo registrado. */
-    public void request(UUID by, Instant now) {
+    public void request() {
         requireStatus(Status.REGISTERED, "solicitar");
         status = Status.REQUESTED;
-        requestedBy = by;
-        requestedAt = now;
     }
 
     /** El almacén de origen aprueba la devolución solicitada. */
-    public void approve(UUID by, Instant now) {
+    public void approve() {
         requireStatus(Status.REQUESTED, "aprobar");
         status = Status.APPROVED;
-        decidedBy = by;
-        decidedAt = now;
     }
 
     /** El almacén de origen rechaza la devolución solicitada; el saldo queda en la obra. */
-    public void reject(String reason, UUID by, Instant now) {
+    public void reject(String reason) {
         requireStatus(Status.REQUESTED, "rechazar");
-        rejectionReason = StockCount.required(reason, NOTE_MAX, "reason", "REJECTION_REASON_REQUIRED",
-                "El rechazo necesita un motivo");
+        rejectionReason = required(reason, REASON_MAX, "El rechazo necesita un motivo");
         status = Status.REJECTED;
-        decidedBy = by;
-        decidedAt = now;
     }
 
     /** La obra inicia el retorno de una devolución aprobada: el material sale de la obra. */
-    public void dispatch(UUID by, Instant now) {
+    public void dispatch() {
         requireStatus(Status.APPROVED, "iniciar el retorno de");
         status = Status.IN_TRANSIT;
-        dispatchedBy = by;
-        dispatchedAt = now;
     }
 
     /**
@@ -156,7 +136,7 @@ public class MaterialReturn {
      *                             {@code MATERIAL_NOT_IN_RETURN}, {@code INVALID_ACCEPTED_QUANTITY} o
      *                             {@code REJECTION_REASON_REQUIRED}
      */
-    public List<MaterialReturnLine> receive(Map<UUID, Verification> verifications, UUID by, Instant now) {
+    public List<MaterialReturnLine> receive(Map<UUID, Verification> verifications) {
         requireStatus(Status.IN_TRANSIT, "verificar");
         for (UUID materialId : verifications.keySet()) {
             if (lines.stream().noneMatch(line -> line.materialId().equals(materialId))) {
@@ -173,52 +153,28 @@ public class MaterialReturn {
                         List.of(new ErrorDetail("materialId", line.materialId().toString())));
             }
             BigDecimal accepted = accepted(verification.acceptedQty(), line);
-            BigDecimal rejected = line.quantity().subtract(accepted);
-            String reason = rejected.signum() > 0
-                    ? StockCount.required(verification.reason(), DETAIL_MAX, "reason", "REJECTION_REASON_REQUIRED",
-                    "Indica el motivo de lo que no se acepta")
+            String reason = accepted.compareTo(line.quantity()) < 0
+                    ? required(verification.reason(), LINE_REASON_MAX, "Indica el motivo de lo que no se acepta")
                     : null;
-            verified.add(new MaterialReturnLine(line.id(), line.materialId(), line.quantity(), line.detail(), accepted,
-                    rejected, reason));
+            verified.add(new MaterialReturnLine(line.id(), line.materialId(), line.quantity(), accepted, reason));
         }
         lines.clear();
         lines.addAll(verified);
         status = Status.RECEIVED;
-        receivedBy = by;
-        receivedAt = now;
         return List.copyOf(verified);
     }
 
     /** La obra anula una devolución que todavía no se aprobó. */
-    public void cancel(UUID by, Instant now) {
+    public void cancel() {
         if (status != Status.REGISTERED && status != Status.REQUESTED) {
             throw invalidStatus("anular");
         }
         status = Status.CANCELLED;
-        cancelledBy = by;
-        cancelledAt = now;
     }
 
     /** ¿Se rechazó la devolución o parte del material verificado? */
     public boolean hasRejections() {
         return status == Status.REJECTED || lines.stream().anyMatch(MaterialReturnLine::hasRejection);
-    }
-
-    /** Reconstrucción de las decisiones y fechas desde la base. */
-    public void restore(UUID requestedBy, Instant requestedAt, UUID decidedBy, Instant decidedAt,
-            String rejectionReason, UUID dispatchedBy, Instant dispatchedAt, UUID receivedBy, Instant receivedAt,
-            UUID cancelledBy, Instant cancelledAt) {
-        this.requestedBy = requestedBy;
-        this.requestedAt = requestedAt;
-        this.decidedBy = decidedBy;
-        this.decidedAt = decidedAt;
-        this.rejectionReason = rejectionReason;
-        this.dispatchedBy = dispatchedBy;
-        this.dispatchedAt = dispatchedAt;
-        this.receivedBy = receivedBy;
-        this.receivedAt = receivedAt;
-        this.cancelledBy = cancelledBy;
-        this.cancelledAt = cancelledAt;
     }
 
     private static BigDecimal accepted(BigDecimal value, MaterialReturnLine line) {
@@ -229,6 +185,19 @@ public class MaterialReturn {
                     List.of(new ErrorDetail("acceptedQty", "de 0 a " + line.quantity().toPlainString())));
         }
         return value.setScale(Quantity.SCALE, RoundingMode.UNNECESSARY);
+    }
+
+    private static String required(String value, int max, String message) {
+        if (value == null || value.isBlank()) {
+            throw new ValidationException("REJECTION_REASON_REQUIRED", message,
+                    List.of(new ErrorDetail("reason", "obligatorio")));
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() > max) {
+            throw new ValidationException("TEXT_TOO_LONG", "El texto supera los " + max + " caracteres",
+                    List.of(new ErrorDetail("reason", "máximo " + max + " caracteres")));
+        }
+        return trimmed;
     }
 
     private void requireStatus(Status expected, String action) {
@@ -258,8 +227,9 @@ public class MaterialReturn {
         return status;
     }
 
-    public String note() {
-        return note;
+    /** Estado con el que se leyó: la actualización solo aplica si sigue siendo ese (bloqueo optimista por estado). */
+    public Status persistedStatus() {
+        return persistedStatus;
     }
 
     public UUID registeredBy() {
@@ -274,51 +244,8 @@ public class MaterialReturn {
         return List.copyOf(lines);
     }
 
-    public long version() {
-        return version;
-    }
-
-    public UUID requestedBy() {
-        return requestedBy;
-    }
-
-    public Instant requestedAt() {
-        return requestedAt;
-    }
-
-    public UUID decidedBy() {
-        return decidedBy;
-    }
-
-    public Instant decidedAt() {
-        return decidedAt;
-    }
-
+    /** Motivo del rechazo de la solicitud, solo en la operación que rechaza (va en el evento, no se guarda). */
     public String rejectionReason() {
         return rejectionReason;
-    }
-
-    public UUID dispatchedBy() {
-        return dispatchedBy;
-    }
-
-    public Instant dispatchedAt() {
-        return dispatchedAt;
-    }
-
-    public UUID receivedBy() {
-        return receivedBy;
-    }
-
-    public Instant receivedAt() {
-        return receivedAt;
-    }
-
-    public UUID cancelledBy() {
-        return cancelledBy;
-    }
-
-    public Instant cancelledAt() {
-        return cancelledAt;
     }
 }

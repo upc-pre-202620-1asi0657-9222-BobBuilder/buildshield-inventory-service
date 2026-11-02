@@ -23,7 +23,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static pe.buildshield.inventory.acceptance.ApiRequest.get;
 import static pe.buildshield.inventory.acceptance.ApiRequest.post;
-import static pe.buildshield.inventory.acceptance.ApiRequest.put;
 import static pe.buildshield.inventory.acceptance.IdentitySteps.EVENT_TIMEOUT;
 
 /**
@@ -32,7 +31,6 @@ import static pe.buildshield.inventory.acceptance.IdentitySteps.EVENT_TIMEOUT;
  */
 public class CountAndReturnSteps {
 
-    private static final String COUNT = "__conteo__";
     private static final String RETURN = "__devolución__";
 
     @Autowired
@@ -83,7 +81,7 @@ public class CountAndReturnSteps {
         String materialId = session.id(sku.toUpperCase()).toString();
         await().pollInSameThread().atMost(EVENT_TIMEOUT).until(() -> jdbc.queryForObject("""
                 SELECT count(*) FROM outbox_events WHERE event_type = 'StockEntryRegistered'
-                AND payload ->> 'entryType' = ? AND payload ->> 'materialId' = ?""", Long.class, entryType,
+                AND payload -> 'payload' ->> 'entryType' = ? AND payload -> 'payload' ->> 'materialId' = ?""", Long.class, entryType,
                 materialId) > 0);
     }
 
@@ -106,76 +104,110 @@ public class CountAndReturnSteps {
         assertThat(session.body().path("total").asLong()).isEqualTo(total);
     }
 
-    // ---------- US41: conteo de validación y ajuste ----------
+    // ---------- US41: conteo físico y ajuste ----------
 
-    @Cuando("inicio un conteo de validación del almacén {string}")
-    public void startCount(String warehouse) throws Exception {
-        session.send(post("/api/v1/stock/counts"), Map.of("warehouseId", session.id(warehouse).toString(),
-                "note", "Conteo de validación"));
-        if (session.status() == 201) {
-            session.put(COUNT, UUID.fromString(session.body().path("id").asText()));
-        }
+    @Cuando("comparo lo contado en el almacén {string}: {string} del material {string} y {string} del material {string}")
+    public void compare(String warehouse, String first, String firstSku, String second, String secondSku)
+            throws Exception {
+        session.send(post("/api/v1/stock/counts/comparison"), countBody(warehouse, first, firstSku, second, secondSku,
+                null));
     }
 
-    @Cuando("registro que conté {string} del material {string} y {string} del material {string}")
-    public void registerCounts(String first, String firstSku, String second, String secondSku) throws Exception {
-        session.send(put("/api/v1/stock/counts/" + session.id(COUNT) + "/lines"), Map.of("lines", List.of(
-                Map.of("materialId", session.id(firstSku.toUpperCase()).toString(), "countedQty", new BigDecimal(first)),
-                Map.of("materialId", session.id(secondSku.toUpperCase()).toString(),
-                        "countedQty", new BigDecimal(second)))));
-        session.expectStatus(200);
+    @Cuando("registro lo contado en el almacén {string}: {string} del material {string} y {string} del material {string}")
+    public void registerWithoutReason(String warehouse, String first, String firstSku, String second, String secondSku)
+            throws Exception {
+        session.send(post("/api/v1/stock/counts"), countBody(warehouse, first, firstSku, second, secondSku, null));
     }
 
-    @Cuando("finalizo el conteo")
-    public void finishCount() throws Exception {
-        session.send(post("/api/v1/stock/counts/" + session.id(COUNT) + "/finish"), null);
-    }
-
-    @Cuando("reviso las diferencias con la nota {string}")
-    public void reviewCount(String note) throws Exception {
-        session.send(post("/api/v1/stock/counts/" + session.id(COUNT) + "/review"), Map.of("note", note));
-        session.expectStatus(200);
-    }
-
-    @Cuando("valido el ajuste con el motivo {string}")
-    public void adjustCount(String reason) throws Exception {
-        session.send(post("/api/v1/stock/counts/" + session.id(COUNT) + "/adjustment"), Map.of("reason", reason));
+    @Cuando("ajusto lo contado en el almacén {string}: {string} del material {string} y {string} del material {string} con el motivo {string}")
+    public void adjust(String warehouse, String first, String firstSku, String second, String secondSku, String reason)
+            throws Exception {
+        session.send(post("/api/v1/stock/counts"), countBody(warehouse, first, firstSku, second, secondSku, reason));
     }
 
     @Entonces("el conteo queda en estado {string} con {int} diferencias")
     public void countStatus(String status, int differences) throws Exception {
-        session.expectStatus(200);
+        assertThat(session.status()).isIn(200, 201);
         assertThat(session.body().path("status").asText()).isEqualTo(status);
         assertThat(session.body().path("differenceCount").asInt()).isEqualTo(differences);
     }
 
-    @Entonces("inventario publicó el ajuste del conteo con la diferencia {string} del material {string}")
-    public void adjustmentPublished(String difference, String sku) {
-        JsonNode payload = awaitOutbox("StockAdjusted", session.id(COUNT));
-        JsonNode line = null;
-        for (JsonNode candidate : payload.path("lines")) {
-            if (candidate.path("materialId").asText().equals(session.id(sku.toUpperCase()).toString())) {
-                line = candidate;
+    @Entonces("el almacén {string} tiene {int} ajustes guardados y el del material {string} dice contado {string}, sistema {string}")
+    public void adjustmentsStored(String warehouse, int total, String sku, String counted, String system)
+            throws Exception {
+        ApiResponse response = session.perform(get("/api/v1/stock/counts")
+                .param("warehouseId", session.id(warehouse).toString()), null, session.accessToken());
+        assertThat(response.status()).isEqualTo(200);
+        JsonNode list = session.read(response);
+        assertThat(list.size()).isEqualTo(total);
+        JsonNode found = null;
+        for (JsonNode item : list) {
+            if (item.path("sku").asText().equals(sku)) {
+                found = item;
             }
         }
-        assertThat(line).as("línea de %s en StockAdjusted", sku).isNotNull();
-        assertThat(line.path("difference").decimalValue()).isEqualByComparingTo(difference);
+        assertThat(found).as("ajuste de %s", sku).isNotNull();
+        assertThat(found.path("countedQty").decimalValue()).isEqualByComparingTo(counted);
+        assertThat(found.path("systemQty").decimalValue()).isEqualByComparingTo(system);
+        assertThat(session.read(session.perform(get("/api/v1/stock/counts/" + found.path("id").asText()), null,
+                session.accessToken())).path("sku").asText()).isEqualTo(sku);
+    }
+
+    @Entonces("el almacén {string} no tiene ajustes guardados")
+    public void noAdjustmentsStored(String warehouse) throws Exception {
+        ApiResponse response = session.perform(get("/api/v1/stock/counts")
+                .param("warehouseId", session.id(warehouse).toString()), null, session.accessToken());
+        assertThat(response.status()).isEqualTo(200);
+        assertThat(session.read(response).size()).isZero();
+    }
+
+    @Entonces("inventario publicó el ajuste del conteo con la diferencia {string} del material {string}")
+    public void adjustmentPublished(String difference, String sku) throws Exception {
+        String materialId = session.id(sku.toUpperCase()).toString();
+        String sql = """
+                SELECT (payload -> 'payload')::text FROM outbox_events WHERE event_type = 'StockAdjusted'
+                AND payload -> 'payload' -> 'lines' -> 0 ->> 'materialId' = ? ORDER BY occurred_at DESC LIMIT 1""";
+        await().pollInSameThread().atMost(EVENT_TIMEOUT).until(() -> !jdbc.queryForList(sql, String.class, materialId)
+                .isEmpty());
+        JsonNode payload = json.readTree(jdbc.queryForObject(sql, String.class, materialId));
+        assertThat(payload.at("/lines/0/difference").decimalValue()).isEqualByComparingTo(difference);
         assertThat(payload.path("reason").asText()).isNotBlank();
+        assertThat(payload.path("countId").asText()).isNotBlank();
+    }
+
+    private Map<String, Object> countBody(String warehouse, String first, String firstSku, String second,
+            String secondSku, String reason) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("warehouseId", session.id(warehouse).toString());
+        body.put("lines", List.of(
+                Map.of("materialId", session.id(firstSku.toUpperCase()).toString(), "countedQty", new BigDecimal(first)),
+                Map.of("materialId", session.id(secondSku.toUpperCase()).toString(), "countedQty",
+                        new BigDecimal(second))));
+        body.put("reason", reason);
+        return body;
     }
 
     // ---------- US43: saldos de obra y devolución ----------
 
     @Dado("que la obra {string} recibió {string} del material {string} desde el almacén {string}")
     public void worksiteReceived(String worksite, String quantity, String sku, String warehouse) throws Exception {
+        // El origen sale de los movimientos: el almacén despacha y la obra recibe ese mismo despacho.
+        entry(quantity, sku, warehouse, "INITIAL", null);
+        session.expectStatus(201);
+        UUID organization = session.id(ScenarioSession.ORGANIZATION);
+        UUID dispatchId = UUID.randomUUID();
+        kafka.send(Topics.ORDERING, dispatchId.toString(), TestEvents.envelope(json, "DispatchDeparted", organization,
+                "DISPATCH", dispatchId, TestEvents.dispatchDeparted(dispatchId, UUID.randomUUID(), session.id(warehouse),
+                        session.id(worksite), List.of(TestEvents.orderLine(UUID.randomUUID(),
+                                session.id(sku.toUpperCase()), quantity))))).get();
+        await().pollInSameThread().atMost(EVENT_TIMEOUT).until(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM stock_movements WHERE source_ref = ?", Long.class, dispatchId) == 1);
         UUID receptionId = UUID.randomUUID();
-        Map<String, Object> payload = TestEvents.reception(receptionId, UUID.randomUUID(), session.id(worksite),
-                List.of(TestEvents.receivedLine(session.id(sku.toUpperCase()), quantity)));
-        payload.put("warehouseId", session.id(warehouse));
-        kafka.send(Topics.ORDERING, receptionId.toString(), TestEvents.envelope(json, "ReceptionConfirmed",
-                session.id(ScenarioSession.ORGANIZATION), "RECEPTION", receptionId, payload)).get();
-        await().pollInSameThread().atMost(EVENT_TIMEOUT).until(() -> jdbc.queryForObject("""
-                SELECT count(*) FROM worksite_supplies WHERE worksite_id = ? AND material_id = ? AND warehouse_id = ?""",
-                Long.class, session.id(worksite), session.id(sku.toUpperCase()), session.id(warehouse)) == 1);
+        kafka.send(Topics.ORDERING, receptionId.toString(), TestEvents.envelope(json, "ReceptionConfirmed", organization,
+                "RECEPTION", receptionId, TestEvents.reception(receptionId, dispatchId, session.id(worksite),
+                        List.of(TestEvents.receivedLine(session.id(sku.toUpperCase()), quantity))))).get();
+        await().pollInSameThread().atMost(EVENT_TIMEOUT).until(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM stock_movements WHERE source_ref = ?", Long.class, dispatchId) == 2);
     }
 
     @Cuando("registro un saldo de {string} del material {string} de la obra {string} con el detalle {string}")
@@ -275,10 +307,10 @@ public class CountAndReturnSteps {
     private JsonNode awaitOutbox(String eventType, UUID aggregateId) {
         await().pollInSameThread().atMost(EVENT_TIMEOUT).until(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM outbox_events WHERE event_type = ? AND aggregate_id = ?", Long.class, eventType,
-                aggregateId.toString()) > 0);
+                aggregateId) > 0);
         String payload = jdbc.queryForObject("""
-                SELECT payload::text FROM outbox_events WHERE event_type = ? AND aggregate_id = ?
-                ORDER BY occurred_at DESC LIMIT 1""", String.class, eventType, aggregateId.toString());
+                SELECT (payload -> 'payload')::text FROM outbox_events WHERE event_type = ? AND aggregate_id = ?
+                ORDER BY occurred_at DESC LIMIT 1""", String.class, eventType, aggregateId);
         try {
             return json.readTree(payload);
         } catch (Exception ex) {

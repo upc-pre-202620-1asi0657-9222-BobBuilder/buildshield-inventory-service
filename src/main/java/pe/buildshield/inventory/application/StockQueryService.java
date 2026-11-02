@@ -88,19 +88,37 @@ public class StockQueryService {
         if (warehouses.isEmpty()) {
             return List.of();
         }
-        List<StockReservation> found = stock.findReservationsByLocations(warehouses.keySet()).stream()
+        Map<UUID, List<StockReservation>> byLine = stock.findReservationsByLocations(warehouses.keySet()).stream()
                 .filter(reservation -> orderId == null || reservation.orderId().equals(orderId))
-                .toList();
-        Map<UUID, MaterialInfo> materials = directory.findMaterials(found.stream()
-                .map(StockReservation::materialId).collect(Collectors.toSet()));
-        return found.stream().map(reservation -> {
-            MaterialInfo material = materials.get(reservation.materialId());
-            return new ReservationView(reservation.id(), reservation.orderId(), reservation.orderLineId(),
-                    reservation.locationId(), warehouses.get(reservation.locationId()).name(), reservation.materialId(),
-                    material == null ? null : material.sku(), material == null ? null : material.name(),
-                    reservation.quantity(), reservation.consumedQty(), reservation.remaining(),
-                    reservation.status().name(), reservation.reservedAt());
-        }).toList();
+                .collect(Collectors.groupingBy(StockReservation::orderLineId, LinkedHashMap::new, Collectors.toList()));
+        Map<UUID, MaterialInfo> materials = directory.findMaterials(byLine.values().stream()
+                .map(rows -> rows.get(0).materialId()).collect(Collectors.toSet()));
+        return byLine.values().stream().map(rows -> reservationView(rows, warehouses, materials)).toList();
+    }
+
+    /** Una vista por línea de pedido: la suma de sus filas (reservada, consumidas y liberada). */
+    private static ReservationView reservationView(List<StockReservation> rows, Map<UUID, Site> warehouses,
+            Map<UUID, MaterialInfo> materials) {
+        StockReservation first = rows.stream().filter(StockReservation::isReleasable).findFirst().orElse(rows.get(0));
+        MaterialInfo material = materials.get(first.materialId());
+        StockReservation.Status status = hasStatus(rows, StockReservation.Status.RESERVED)
+                ? StockReservation.Status.RESERVED
+                : hasStatus(rows, StockReservation.Status.RELEASED) ? StockReservation.Status.RELEASED
+                : StockReservation.Status.CONSUMED;
+        return new ReservationView(first.id(), first.orderId(), first.orderLineId(), first.locationId(),
+                warehouses.get(first.locationId()).name(), first.materialId(),
+                material == null ? null : material.sku(), material == null ? null : material.name(),
+                sum(rows, null), sum(rows, StockReservation.Status.CONSUMED), sum(rows, StockReservation.Status.RESERVED),
+                status.name(), first.createdAt());
+    }
+
+    private static boolean hasStatus(List<StockReservation> rows, StockReservation.Status status) {
+        return rows.stream().anyMatch(row -> row.status() == status);
+    }
+
+    private static BigDecimal sum(List<StockReservation> rows, StockReservation.Status status) {
+        return rows.stream().filter(row -> status == null || row.status() == status)
+                .map(StockReservation::quantity).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /** Últimos movimientos de los lugares visibles; filtros opcionales por lugar y material. */
@@ -173,8 +191,9 @@ public class StockQueryService {
             MaterialInfo material = materials.get(movement.materialId());
             return new MovementView(movement.id(), movement.locationId(), site.type(), site.name(),
                     movement.materialId(), material == null ? null : material.sku(), movement.type().name(),
-                    movement.quantity(), movement.balanceAfter(), movement.reference(), movement.occurredAt(),
-                    movement.recordedBy());
+                    movement.quantity(), movement.balanceAfter(),
+                    movement.sourceRef() == null ? null : movement.sourceRef().toString(), movement.createdAt(),
+                    movement.createdBy());
         }).toList();
     }
 
@@ -244,7 +263,7 @@ public class StockQueryService {
             BigDecimal remainingQty, String status, Instant reservedAt) {
     }
 
-    /** Movimiento de stock. */
+    /** Movimiento de stock. {@code reference} es el identificador de lo que lo originó (nulo en las cargas). */
     public record MovementView(UUID id, UUID locationId, String locationType, String locationName, UUID materialId,
             String sku, String type, BigDecimal quantity, BigDecimal balanceAfter, String reference,
             Instant occurredAt, UUID recordedBy) {

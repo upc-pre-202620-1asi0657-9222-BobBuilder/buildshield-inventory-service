@@ -34,7 +34,7 @@ public interface SiteDirectory {
     Set<UUID> assignedLocations(UUID userId);
 
     /** Obra o almacén. */
-    record Site(UUID id, String type, String name, String address, boolean active) {
+    record Site(UUID id, String type, String name, boolean active) {
 
         public boolean isWarehouse() {
             return WAREHOUSE.equals(type);

@@ -60,7 +60,7 @@ class StockConcurrencyIntegrationTest {
         TestDatabase.reset(jdbc);
         warehouse = UUID.randomUUID();
         cement = UUID.randomUUID();
-        inTransaction(() -> operations.add(warehouse, cement, new BigDecimal("10"), "Guía"));
+        inTransaction(() -> operations.add(warehouse, cement, new BigDecimal("10"), null));
     }
 
     @RepeatedTest(value = 20, name = "repetición {currentRepetition} de {totalRepetitions}")
@@ -102,9 +102,9 @@ class StockConcurrencyIntegrationTest {
     void consumption_never_exceeds_what_was_reserved_and_release_returns_the_rest() {
         UUID line = UUID.randomUUID();
         inTransaction(() -> operations.reserve(warehouse, cement, new BigDecimal("6"), UUID.randomUUID(), line));
-        inTransaction(() -> operations.consumeReservation(warehouse, cement, new BigDecimal("4"), line, "Despacho 1"));
+        inTransaction(() -> operations.consumeReservation(warehouse, cement, new BigDecimal("4"), line, UUID.randomUUID()));
         assertThatThrownBy(() -> inTransaction(() ->
-                operations.consumeReservation(warehouse, cement, new BigDecimal("3"), line, "Despacho 2")))
+                operations.consumeReservation(warehouse, cement, new BigDecimal("3"), line, UUID.randomUUID())))
                 .isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("code", StockOperations.RESERVATION_NOT_AVAILABLE);
 
@@ -113,14 +113,14 @@ class StockConcurrencyIntegrationTest {
 
         TenantContext.runAs(WAREHOUSE_MANAGER, () -> inTransaction(() -> {
             var reservation = operationsReservation(line);
-            return operations.release(reservation, "Cierre").orElseThrow();
+            return operations.release(reservation).orElseThrow();
         }));
 
         assertThat(level("available_qty")).isEqualByComparingTo("6");
         assertThat(level("reserved_qty")).isZero();
-        assertThat(jdbc.queryForObject("SELECT status FROM stock_reservations WHERE order_line_id = ?",
-                String.class, line)).isEqualTo("RELEASED");
-        assertThat(jdbc.queryForList("SELECT type FROM stock_movements ORDER BY occurred_at, type", String.class))
+        assertThat(jdbc.queryForList("SELECT status || ' ' || quantity FROM stock_reservations WHERE order_line_id = ?",
+                String.class, line)).containsExactlyInAnyOrder("RELEASED 2.000", "CONSUMED 4.000");
+        assertThat(jdbc.queryForList("SELECT type FROM stock_movements ORDER BY created_at, type", String.class))
                 .containsExactlyInAnyOrder("ENTRY", "RESERVE", "DISPATCH", "RELEASE");
     }
 

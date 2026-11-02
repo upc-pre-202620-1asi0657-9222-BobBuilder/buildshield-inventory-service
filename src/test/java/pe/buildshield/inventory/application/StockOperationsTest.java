@@ -38,6 +38,7 @@ class StockOperationsTest {
     private static final UUID WAREHOUSE = UUID.randomUUID();
     private static final UUID CEMENT = UUID.randomUUID();
     private static final UUID ITEM = UUID.randomUUID();
+    private static final UUID DISPATCH = UUID.randomUUID();
 
     private final StockRepository stock = mock(StockRepository.class);
     private final StockOperations operations = new StockOperations(stock, Clock.fixed(NOW, ZoneOffset.UTC));
@@ -51,15 +52,14 @@ class StockOperationsTest {
         when(stock.find(WAREHOUSE, CEMENT)).thenReturn(Optional.of(item("10", 4)));
         when(stock.tryDeduct(ITEM, 4, Quantity.of("7"))).thenReturn(true);
 
-        StockLevel level = operations.deduct(WAREHOUSE, CEMENT, new BigDecimal("7"), "despacho D-1");
+        StockLevel level = operations.deduct(WAREHOUSE, CEMENT, new BigDecimal("7"), DISPATCH);
 
         assertThat(level.availableQty()).isEqualByComparingTo("3");
         ArgumentCaptor<StockMovement> movement = ArgumentCaptor.forClass(StockMovement.class);
         verify(stock).record(movement.capture());
         assertThat(movement.getValue().type()).isEqualTo(StockMovement.Type.DEDUCTION);
-        assertThat(movement.getValue().balanceAfter()).isEqualByComparingTo("3");
-        assertThat(movement.getValue().reference()).isEqualTo("despacho D-1");
-        assertThat(movement.getValue().occurredAt()).isEqualTo(NOW);
+        assertThat(movement.getValue().sourceRef()).isEqualTo(DISPATCH);
+        assertThat(movement.getValue().createdAt()).isEqualTo(NOW);
     }
 
     @Test
@@ -131,14 +131,13 @@ class StockOperationsTest {
     void entry_adds_and_records_the_movement() {
         when(stock.add(WAREHOUSE, CEMENT, Quantity.of("100"))).thenReturn(item("120", 6));
 
-        StockLevel level = operations.add(WAREHOUSE, CEMENT, new BigDecimal("100"), "Guía 001");
+        StockLevel level = operations.add(WAREHOUSE, CEMENT, new BigDecimal("100"), null);
 
         assertThat(level.availableQty()).isEqualByComparingTo("120");
         ArgumentCaptor<StockMovement> movement = ArgumentCaptor.forClass(StockMovement.class);
         verify(stock).record(movement.capture());
         assertThat(movement.getValue().type()).isEqualTo(StockMovement.Type.ENTRY);
         assertThat(movement.getValue().quantity()).isEqualByComparingTo("100");
-        assertThat(movement.getValue().balanceAfter()).isEqualByComparingTo("120");
     }
 
     // ---------- Reservas (RF40) y consumo al despachar (RF41) ----------
@@ -150,9 +149,9 @@ class StockOperationsTest {
         return new StockItem(ITEM, WAREHOUSE, CEMENT, new BigDecimal(available), new BigDecimal(reserved), version);
     }
 
-    private static StockReservation reservation(String quantity, String consumed) {
-        return new StockReservation(UUID.randomUUID(), ITEM, WAREHOUSE, CEMENT, ORDER, LINE, new BigDecimal(quantity),
-                new BigDecimal(consumed), StockReservation.Status.RESERVED, NOW);
+    private static StockReservation reservation(String remaining) {
+        return new StockReservation(UUID.randomUUID(), ITEM, WAREHOUSE, CEMENT, ORDER, LINE, new BigDecimal(remaining),
+                StockReservation.Status.RESERVED, NOW);
     }
 
     @Test
@@ -167,11 +166,12 @@ class StockOperationsTest {
         ArgumentCaptor<StockReservation> saved = ArgumentCaptor.forClass(StockReservation.class);
         verify(stock).saveReservation(saved.capture());
         assertThat(saved.getValue().orderLineId()).isEqualTo(LINE);
-        assertThat(saved.getValue().remaining()).isEqualByComparingTo("7");
+        assertThat(saved.getValue().quantity()).isEqualByComparingTo("7");
+        assertThat(saved.getValue().status()).isEqualTo(StockReservation.Status.RESERVED);
         ArgumentCaptor<StockMovement> movement = ArgumentCaptor.forClass(StockMovement.class);
         verify(stock).record(movement.capture());
         assertThat(movement.getValue().type()).isEqualTo(StockMovement.Type.RESERVE);
-        assertThat(movement.getValue().balanceAfter()).isEqualByComparingTo("3");
+        assertThat(movement.getValue().sourceRef()).isEqualTo(ORDER);
     }
 
     @Test
@@ -199,24 +199,24 @@ class StockOperationsTest {
 
     @Test
     void consuming_a_reservation_takes_it_out_of_reserved_and_records_the_dispatch() {
-        when(stock.findReservation(LINE)).thenReturn(Optional.of(reservation("50", "20")));
+        when(stock.findReservation(LINE)).thenReturn(Optional.of(reservation("30")));
         when(stock.find(WAREHOUSE, CEMENT)).thenReturn(Optional.of(item("10", "30", 8)));
         when(stock.tryConsumeReserved(ITEM, 8, Quantity.of("30"))).thenReturn(true);
         when(stock.tryConsumeReservation(LINE, Quantity.of("30"))).thenReturn(true);
 
-        StockLevel level = operations.consumeReservation(WAREHOUSE, CEMENT, new BigDecimal("30"), LINE, "Despacho D-2");
+        StockLevel level = operations.consumeReservation(WAREHOUSE, CEMENT, new BigDecimal("30"), LINE, DISPATCH);
 
         assertThat(level.availableQty()).isEqualByComparingTo("10");
         assertThat(level.reservedQty()).isZero();
         ArgumentCaptor<StockMovement> movement = ArgumentCaptor.forClass(StockMovement.class);
         verify(stock).record(movement.capture());
         assertThat(movement.getValue().type()).isEqualTo(StockMovement.Type.DISPATCH);
-        assertThat(movement.getValue().reference()).isEqualTo("Despacho D-2");
+        assertThat(movement.getValue().sourceRef()).isEqualTo(DISPATCH);
     }
 
     @Test
     void consuming_more_than_reserved_is_a_conflict_without_effects() {
-        when(stock.findReservation(LINE)).thenReturn(Optional.of(reservation("50", "40")));
+        when(stock.findReservation(LINE)).thenReturn(Optional.of(reservation("10")));
         assertThatThrownBy(() -> operations.consumeReservation(WAREHOUSE, CEMENT, new BigDecimal("11"), LINE, null))
                 .isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("code", StockOperations.RESERVATION_NOT_AVAILABLE);
@@ -225,7 +225,7 @@ class StockOperationsTest {
         assertThatThrownBy(() -> operations.consumeReservation(WAREHOUSE, CEMENT, BigDecimal.ONE, LINE, null))
                 .hasFieldOrPropertyWithValue("code", StockOperations.RESERVATION_NOT_AVAILABLE);
 
-        when(stock.findReservation(LINE)).thenReturn(Optional.of(reservation("50", "0")));
+        when(stock.findReservation(LINE)).thenReturn(Optional.of(reservation("50")));
         when(stock.find(WAREHOUSE, CEMENT)).thenReturn(Optional.of(item("10", "0", 8)));
         assertThatThrownBy(() -> operations.consumeReservation(WAREHOUSE, CEMENT, BigDecimal.ONE, LINE, null))
                 .hasFieldOrPropertyWithValue("code", StockOperations.RESERVATION_NOT_AVAILABLE);
@@ -240,7 +240,7 @@ class StockOperationsTest {
 
     @Test
     void consuming_gives_up_after_three_version_conflicts() {
-        when(stock.findReservation(LINE)).thenReturn(Optional.of(reservation("50", "0")));
+        when(stock.findReservation(LINE)).thenReturn(Optional.of(reservation("50")));
         when(stock.find(WAREHOUSE, CEMENT)).thenReturn(Optional.of(item("10", "50", 8)));
         when(stock.tryConsumeReserved(eq(ITEM), anyLong(), any())).thenReturn(false);
 
@@ -252,12 +252,12 @@ class StockOperationsTest {
 
     @Test
     void releasing_returns_what_remains_to_available_and_marks_the_reservation_released() {
-        StockReservation reservation = reservation("50", "20");
+        StockReservation reservation = reservation("30");
         when(stock.find(WAREHOUSE, CEMENT)).thenReturn(Optional.of(item("10", "30", 8)));
         when(stock.tryRelease(ITEM, 8, Quantity.of("30"))).thenReturn(true);
         when(stock.tryMarkReleased(reservation.id())).thenReturn(true);
 
-        StockLevel level = operations.release(reservation, "Liberación").orElseThrow();
+        StockLevel level = operations.release(reservation).orElseThrow();
 
         assertThat(level.availableQty()).isEqualByComparingTo("40");
         assertThat(level.reservedQty()).isZero();
@@ -265,53 +265,53 @@ class StockOperationsTest {
         verify(stock).record(movement.capture());
         assertThat(movement.getValue().type()).isEqualTo(StockMovement.Type.RELEASE);
         assertThat(movement.getValue().quantity()).isEqualByComparingTo("30");
-        assertThat(movement.getValue().balanceAfter()).isEqualByComparingTo("40");
+        assertThat(movement.getValue().sourceRef()).isEqualTo(ORDER);
     }
 
     @Test
     void releasing_a_consumed_or_released_reservation_does_nothing() {
         StockReservation consumed = new StockReservation(UUID.randomUUID(), ITEM, WAREHOUSE, CEMENT, ORDER, LINE,
-                new BigDecimal("5"), new BigDecimal("5"), StockReservation.Status.CONSUMED, NOW);
+                new BigDecimal("5"), StockReservation.Status.CONSUMED, NOW);
         StockReservation released = new StockReservation(UUID.randomUUID(), ITEM, WAREHOUSE, CEMENT, ORDER, LINE,
-                new BigDecimal("5"), BigDecimal.ZERO, StockReservation.Status.RELEASED, NOW);
+                new BigDecimal("5"), StockReservation.Status.RELEASED, NOW);
 
-        assertThat(operations.release(consumed, null)).isEmpty();
-        assertThat(operations.release(released, null)).isEmpty();
+        assertThat(operations.release(consumed)).isEmpty();
+        assertThat(operations.release(released)).isEmpty();
         verify(stock, never()).tryRelease(any(), anyLong(), any());
     }
 
     @Test
     void releasing_retries_on_version_conflicts_and_gives_up_after_three() {
-        StockReservation reservation = reservation("5", "0");
+        StockReservation reservation = reservation("5");
         when(stock.find(WAREHOUSE, CEMENT)).thenReturn(Optional.of(item("0", "5", 1)), Optional.of(item("0", "5", 2)));
         when(stock.tryRelease(ITEM, 1, Quantity.of("5"))).thenReturn(false);
         when(stock.tryRelease(ITEM, 2, Quantity.of("5"))).thenReturn(true);
         when(stock.tryMarkReleased(reservation.id())).thenReturn(true);
-        assertThat(operations.release(reservation, null)).isPresent();
+        assertThat(operations.release(reservation)).isPresent();
 
         when(stock.tryRelease(eq(ITEM), anyLong(), any())).thenReturn(false);
-        assertThatThrownBy(() -> operations.release(reservation, null))
+        assertThatThrownBy(() -> operations.release(reservation))
                 .isInstanceOf(ConcurrentStockModificationException.class);
     }
 
     @Test
     void releasing_fails_if_another_release_won_or_the_item_is_missing() {
-        StockReservation reservation = reservation("5", "0");
+        StockReservation reservation = reservation("5");
         when(stock.find(WAREHOUSE, CEMENT)).thenReturn(Optional.of(item("0", "5", 1)));
         when(stock.tryRelease(ITEM, 1, Quantity.of("5"))).thenReturn(true);
         when(stock.tryMarkReleased(reservation.id())).thenReturn(false);
-        assertThatThrownBy(() -> operations.release(reservation, null))
+        assertThatThrownBy(() -> operations.release(reservation))
                 .isInstanceOf(ConcurrentStockModificationException.class);
 
         when(stock.find(WAREHOUSE, CEMENT)).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> operations.release(reservation, null)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> operations.release(reservation)).isInstanceOf(IllegalStateException.class);
     }
 
     @Test
     void adding_creates_or_increases_the_item_and_reports_it() {
         when(stock.add(WAREHOUSE, CEMENT, Quantity.of("5"))).thenReturn(item("15", "0", 2));
 
-        StockLevel level = operations.add(WAREHOUSE, CEMENT, new BigDecimal("5"), "Guía 7");
+        StockLevel level = operations.add(WAREHOUSE, CEMENT, new BigDecimal("5"), null);
 
         assertThat(level.availableQty()).isEqualByComparingTo("15");
         assertThat(level.stockItemId()).isEqualTo(ITEM);

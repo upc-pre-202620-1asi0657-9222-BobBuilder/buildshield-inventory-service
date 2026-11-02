@@ -16,8 +16,6 @@ import java.util.List;
 
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.decimal;
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.list;
-import static pe.buildshield.inventory.infrastructure.messaging.Payloads.optionalUuid;
-import static pe.buildshield.inventory.infrastructure.messaging.Payloads.text;
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.uuid;
 
 /**
@@ -45,6 +43,9 @@ public class OrderingEventConsumer {
     static final String RECEPTION_PARTIALLY_RECEIVED = "ReceptionPartiallyReceived";
     static final String RECEPTION_CONFIRMED = "ReceptionConfirmed";
 
+    /** Nombre en la llave de {@code processed_events}. */
+    static final String CONSUMER = "OrderingEventConsumer";
+
     private static final Logger log = LoggerFactory.getLogger(OrderingEventConsumer.class);
 
     private final IdempotentEventProcessor processor;
@@ -57,7 +58,7 @@ public class OrderingEventConsumer {
 
     @KafkaListener(topics = "${buildshield.messaging.consumes.ordering:buildshield.ordering}")
     public void onMessage(ConsumerRecord<String, String> record) {
-        processor.process(record, this::handle);
+        processor.process(CONSUMER, record, this::handle);
     }
 
     void handle(EventEnvelope event) {
@@ -67,7 +68,7 @@ public class OrderingEventConsumer {
                     uuid(payload, "warehouseId"), orderLines(payload)));
             case DISPATCH_DEPARTED -> stock.deductForDispatch(new OrderingSignals.DispatchDeparted(
                     uuid(payload, "dispatchId"), uuid(payload, "orderId"), uuid(payload, "warehouseId"),
-                    text(payload, "manifestCode"), orderLines(payload)));
+                    orderLines(payload)));
             case RECEPTION_PARTIALLY_RECEIVED -> stock.receiveAtWorksite(reception(payload,
                     InventoryEvents.SOURCE_PARTIAL));
             case RECEPTION_CONFIRMED -> stock.receiveAtWorksite(reception(payload,
@@ -87,7 +88,7 @@ public class OrderingEventConsumer {
 
     private static OrderingSignals.ReceptionReceived reception(JsonNode payload, String source) {
         return new OrderingSignals.ReceptionReceived(uuid(payload, "receptionId"), uuid(payload, "dispatchId"),
-                uuid(payload, "worksiteId"), optionalUuid(payload, "warehouseId"), source, list(payload, "lines",
+                uuid(payload, "worksiteId"), source, list(payload, "lines",
                 line -> new OrderingSignals.ReceivedLine(uuid(line, "materialId"), decimal(line, "deltaQuantity"))));
     }
 }

@@ -14,27 +14,24 @@ import java.util.UUID;
 
 /**
  * Devoluciones en memoria con la misma semántica que {@code JdbcMaterialReturnRepository}: cada lectura devuelve una
- * copia y la actualización exige la versión leída. Una sola organización.
+ * copia y la actualización exige que el estado siga siendo el leído. Una sola organización.
  */
 public class InMemoryMaterialReturnRepository implements MaterialReturnRepository {
 
     private final Map<UUID, MaterialReturn> returns = new HashMap<>();
-    private final Map<UUID, Long> versions = new HashMap<>();
 
     @Override
     public void add(MaterialReturn materialReturn) {
         returns.put(materialReturn.id(), materialReturn);
-        versions.put(materialReturn.id(), 0L);
     }
 
     @Override
     public boolean update(MaterialReturn materialReturn) {
-        Long current = versions.get(materialReturn.id());
-        if (current == null || current != materialReturn.version()) {
+        MaterialReturn current = returns.get(materialReturn.id());
+        if (current == null || current.status() != materialReturn.persistedStatus()) {
             return false;
         }
         returns.put(materialReturn.id(), materialReturn);
-        versions.put(materialReturn.id(), current + 1);
         return true;
     }
 
@@ -57,12 +54,7 @@ public class InMemoryMaterialReturnRepository implements MaterialReturnRepositor
     }
 
     private MaterialReturn copy(MaterialReturn source) {
-        MaterialReturn copy = new MaterialReturn(source.id(), source.worksiteId(), source.warehouseId(),
-                source.status(), source.note(), source.registeredBy(), source.registeredAt(), source.lines(),
-                versions.get(source.id()));
-        copy.restore(source.requestedBy(), source.requestedAt(), source.decidedBy(), source.decidedAt(),
-                source.rejectionReason(), source.dispatchedBy(), source.dispatchedAt(), source.receivedBy(),
-                source.receivedAt(), source.cancelledBy(), source.cancelledAt());
-        return copy;
+        return new MaterialReturn(source.id(), source.worksiteId(), source.warehouseId(), source.status(),
+                source.registeredBy(), source.registeredAt(), source.lines());
     }
 }

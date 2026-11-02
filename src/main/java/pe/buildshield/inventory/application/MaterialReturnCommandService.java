@@ -13,7 +13,6 @@ import pe.buildshield.inventory.domain.model.MaterialReturnRepository;
 import pe.buildshield.inventory.domain.model.StockItem;
 import pe.buildshield.inventory.domain.model.StockMovement;
 import pe.buildshield.inventory.domain.model.StockRepository;
-import pe.buildshield.inventory.domain.model.WorksiteSupplyRepository;
 import pe.buildshield.inventory.shared.error.ConflictException;
 import pe.buildshield.inventory.shared.error.ErrorDetail;
 import pe.buildshield.inventory.shared.error.ForbiddenException;
@@ -42,11 +41,11 @@ import java.util.UUID;
  *       se aprobó.</li>
  *   <li>Lado del almacén de origen (administrador o encargado asignado al almacén): aprobar o rechazar la
  *       solicitud con su motivo y verificar lo recibido; solo lo aceptado vuelve al stock del almacén
- *       (RETURN_IN) y lo no aceptado queda registrado con su motivo.</li>
+ *       (RETURN_IN). Lo no aceptado queda como diferencia en la línea; su motivo va en el evento.</li>
  * </ul>
  *
- * El almacén de origen es el que despachó el material a la obra (se anota al recibir cada despacho). Cada cambio
- * de estado publica su evento en la misma transacción (Transactional Outbox).
+ * El almacén de origen es el que despachó el material a la obra (sale de los movimientos de cada despacho). Cada
+ * cambio de estado publica su evento en la misma transacción (Transactional Outbox).
  */
 @Service
 public class MaterialReturnCommandService {
@@ -56,18 +55,15 @@ public class MaterialReturnCommandService {
     static final String SITE_MANAGER = "SITE_MANAGER";
 
     private final MaterialReturnRepository returns;
-    private final WorksiteSupplyRepository supplies;
     private final StockRepository stock;
     private final StockOperations operations;
     private final SiteDirectory directory;
     private final OutboxWriter outbox;
     private final Clock clock;
 
-    public MaterialReturnCommandService(MaterialReturnRepository returns, WorksiteSupplyRepository supplies,
-            StockRepository stock, StockOperations operations, SiteDirectory directory, OutboxWriter outbox,
+    public MaterialReturnCommandService(MaterialReturnRepository returns, StockRepository stock, StockOperations operations, SiteDirectory directory, OutboxWriter outbox,
             Clock clock) {
         this.returns = returns;
-        this.supplies = supplies;
         this.stock = stock;
         this.operations = operations;
         this.directory = directory;
@@ -84,7 +80,7 @@ public class MaterialReturnCommandService {
      *                           {@code RETURN_EXCEEDS_BALANCE}
      */
     @Transactional
-    public MaterialReturn register(UUID worksiteId, UUID warehouseId, List<DeclaredLine> lines, String note) {
+    public MaterialReturn register(UUID worksiteId, UUID warehouseId, List<DeclaredLine> lines) {
         TenantInfo requester = TenantContext.require();
         directory.findLocation(worksiteId)
                 .filter(Site::isWorksite)
@@ -101,14 +97,14 @@ public class MaterialReturnCommandService {
                         List.of(new ErrorDetail("materialId", String.valueOf(materialId))));
             }
         }
-        UUID origin = originWarehouse(warehouseId, materialIds, supplies.originWarehouses(worksiteId, materialIds));
+        UUID origin = originWarehouse(warehouseId, materialIds, stock.originWarehouses(worksiteId, materialIds));
         Site warehouse = directory.findLocation(origin)
                 .filter(Site::isWarehouse)
                 .orElseThrow(() -> new ResourceNotFoundException("WAREHOUSE_NOT_FOUND", "El almacén no existe"));
         if (!warehouse.active()) {
             throw new ConflictException("SITE_INACTIVE", "El almacén de origen está desactivado");
         }
-        MaterialReturn created = MaterialReturn.register(worksiteId, origin, lines, note, requester.userId(),
+        MaterialReturn created = MaterialReturn.register(worksiteId, origin, lines, requester.userId(),
                 clock.instant());
         requireBalance(created);
         returns.add(created);
@@ -121,7 +117,7 @@ public class MaterialReturnCommandService {
         MaterialReturn materialReturn = load(returnId);
         requireWorksiteSide(materialReturn);
         requireBalance(materialReturn);
-        materialReturn.request(TenantContext.require().userId(), clock.instant());
+        materialReturn.request();
         return saveAndPublish(materialReturn, InventoryEvents.MATERIAL_RETURN_REQUESTED);
     }
 
@@ -130,7 +126,7 @@ public class MaterialReturnCommandService {
     public MaterialReturn approve(UUID returnId) {
         MaterialReturn materialReturn = load(returnId);
         requireWarehouseSide(materialReturn);
-        materialReturn.approve(TenantContext.require().userId(), clock.instant());
+        materialReturn.approve();
         return saveAndPublish(materialReturn, InventoryEvents.MATERIAL_RETURN_APPROVED);
     }
 
@@ -139,7 +135,7 @@ public class MaterialReturnCommandService {
     public MaterialReturn reject(UUID returnId, String reason) {
         MaterialReturn materialReturn = load(returnId);
         requireWarehouseSide(materialReturn);
-        materialReturn.reject(reason, TenantContext.require().userId(), clock.instant());
+        materialReturn.reject(reason);
         return saveAndPublish(materialReturn, InventoryEvents.MATERIAL_RETURN_REJECTED);
     }
 
@@ -148,30 +144,27 @@ public class MaterialReturnCommandService {
     public MaterialReturn dispatch(UUID returnId) {
         MaterialReturn materialReturn = load(returnId);
         requireWorksiteSide(materialReturn);
-        materialReturn.dispatch(TenantContext.require().userId(), clock.instant());
-        String reference = "Devolución " + StockCountCommandService.shortId(materialReturn.id()) + " al almacén";
+        materialReturn.dispatch();
         for (MaterialReturnLine line : materialReturn.lines()) {
             operations.deduct(materialReturn.worksiteId(), line.materialId(), line.quantity(),
-                    StockMovement.Type.RETURN_OUT, reference);
+                    StockMovement.Type.RETURN_OUT, materialReturn.id());
         }
         return saveAndPublish(materialReturn, InventoryEvents.MATERIAL_RETURN_DISPATCHED);
     }
 
     /**
-     * AC02 y AC03: el almacén verifica lo recibido. Reincorpora únicamente lo aceptado (RETURN_IN) y registra lo
+     * AC02 y AC03: el almacén verifica lo recibido. Reincorpora únicamente lo aceptado (RETURN_IN) y publica lo
      * rechazado de cada material con su motivo.
      */
     @Transactional
     public MaterialReturn receive(UUID returnId, Map<UUID, Verification> verifications) {
         MaterialReturn materialReturn = load(returnId);
         requireWarehouseSide(materialReturn);
-        List<MaterialReturnLine> verified = materialReturn.receive(verifications, TenantContext.require().userId(),
-                clock.instant());
-        String reference = "Devolución " + StockCountCommandService.shortId(materialReturn.id()) + " de la obra";
+        List<MaterialReturnLine> verified = materialReturn.receive(verifications);
         for (MaterialReturnLine line : verified) {
             if (line.acceptedQty().signum() > 0) {
                 operations.add(materialReturn.warehouseId(), line.materialId(), line.acceptedQty(),
-                        StockMovement.Type.RETURN_IN, reference);
+                        StockMovement.Type.RETURN_IN, materialReturn.id());
             }
         }
         return saveAndPublish(materialReturn, InventoryEvents.MATERIAL_RETURN_RECEIVED);
@@ -182,7 +175,7 @@ public class MaterialReturnCommandService {
     public MaterialReturn cancel(UUID returnId) {
         MaterialReturn materialReturn = load(returnId);
         requireWorksiteSide(materialReturn);
-        materialReturn.cancel(TenantContext.require().userId(), clock.instant());
+        materialReturn.cancel();
         return saveAndPublish(materialReturn, InventoryEvents.MATERIAL_RETURN_CANCELLED);
     }
 

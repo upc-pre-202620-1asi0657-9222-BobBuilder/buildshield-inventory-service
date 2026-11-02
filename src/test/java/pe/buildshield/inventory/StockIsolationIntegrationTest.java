@@ -107,8 +107,8 @@ class StockIsolationIntegrationTest {
     private UUID location(UUID organizationId, String type, String name) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO location_projection (location_id, organization_id, type, name, address, active, updated_at)
-                VALUES (?, ?, ?, ?, 'Av. 1', true, ?)""", id, organizationId, type, name, Timestamp.from(Instant.now()));
+                INSERT INTO location_projection (location_id, organization_id, type, name, active, updated_at)
+                VALUES (?, ?, ?, ?, true, ?)""", id, organizationId, type, name, Timestamp.from(Instant.now()));
         return id;
     }
 

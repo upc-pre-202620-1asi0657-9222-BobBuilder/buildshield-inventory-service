@@ -6,12 +6,15 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Reserva del stock de una línea de pedido aprobada (RF40, saga de reserva). Lo reservado sale del disponible
- * del almacén y se consume, total o parcialmente, cuando parte cada despacho (RF41). Lo que no se consumió se
- * libera cuando el pedido se rechaza o se cierra.
+ * Reserva del stock de una línea de pedido aprobada (RF40, saga de reserva). Lo reservado sale del disponible del
+ * almacén y se consume, total o parcialmente, cuando parte cada despacho (RF41). Lo que no se consumió se libera cuando
+ * el pedido se rechaza o se cierra.
+ *
+ * <p>Una línea puede tener varias filas: una RESERVED con lo que queda y una CONSUMED por cada consumo parcial, además
+ * de la RELEASED con lo liberado. Lo reservado para la línea es la suma de sus filas.
  */
 public record StockReservation(UUID id, UUID stockItemId, UUID locationId, UUID materialId, UUID orderId,
-        UUID orderLineId, BigDecimal quantity, BigDecimal consumedQty, Status status, Instant reservedAt) {
+        UUID orderLineId, BigDecimal quantity, Status status, Instant createdAt) {
 
     public enum Status { RESERVED, CONSUMED, RELEASED }
 
@@ -23,32 +26,27 @@ public record StockReservation(UUID id, UUID stockItemId, UUID locationId, UUID 
         Objects.requireNonNull(orderId, "orderId");
         Objects.requireNonNull(orderLineId, "orderLineId");
         Objects.requireNonNull(quantity, "quantity");
-        Objects.requireNonNull(consumedQty, "consumedQty");
         Objects.requireNonNull(status, "status");
-        Objects.requireNonNull(reservedAt, "reservedAt");
-        if (quantity.signum() <= 0 || consumedQty.signum() < 0 || consumedQty.compareTo(quantity) > 0) {
-            throw new IllegalStateException("Una reserva no consume más de lo reservado");
+        Objects.requireNonNull(createdAt, "createdAt");
+        if (quantity.signum() <= 0) {
+            throw new IllegalStateException("Una reserva tiene cantidad mayor que cero");
         }
     }
 
     /** Nueva reserva de toda la cantidad, sin consumir. */
     public static StockReservation reserve(StockItem item, UUID orderId, UUID orderLineId, Quantity quantity,
             Instant now) {
-        return new StockReservation(UUID.randomUUID(), item.id(), item.locationId(), item.materialId(), orderId,
-                orderLineId, quantity.value(), BigDecimal.ZERO.setScale(Quantity.SCALE), Status.RESERVED, now);
+        return new StockReservation(TimeOrderedId.next(), item.id(), item.locationId(), item.materialId(), orderId,
+                orderLineId, quantity.value(), Status.RESERVED, now);
     }
 
-    public BigDecimal remaining() {
-        return quantity.subtract(consumedQty);
-    }
-
-    /** ¿Queda reservado al menos {@code amount} para consumir? */
+    /** ¿Queda reservado al menos {@code amount} en esta fila? */
     public boolean canConsume(Quantity amount) {
-        return status == Status.RESERVED && remaining().compareTo(amount.value()) >= 0;
+        return status == Status.RESERVED && quantity.compareTo(amount.value()) >= 0;
     }
 
-    /** ¿Sigue vigente con algo sin consumir que se pueda liberar? */
+    /** ¿Sigue vigente, con algo que se pueda liberar? */
     public boolean isReleasable() {
-        return status == Status.RESERVED && remaining().signum() > 0;
+        return status == Status.RESERVED;
     }
 }

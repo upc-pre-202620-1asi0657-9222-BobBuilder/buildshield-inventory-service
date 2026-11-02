@@ -222,8 +222,8 @@ public class InventorySteps {
     private JsonNode awaitOutbox(String eventType, UUID aggregateId) {
         await().pollInSameThread().atMost(EVENT_TIMEOUT).until(() -> outboxCount(eventType, aggregateId) > 0);
         String payload = jdbc.queryForObject("""
-                SELECT payload::text FROM outbox_events WHERE event_type = ? AND aggregate_id = ?
-                ORDER BY occurred_at DESC LIMIT 1""", String.class, eventType, aggregateId.toString());
+                SELECT (payload -> 'payload')::text FROM outbox_events WHERE event_type = ? AND aggregate_id = ?
+                ORDER BY occurred_at DESC LIMIT 1""", String.class, eventType, aggregateId);
         try {
             return json.readTree(payload);
         } catch (Exception ex) {
@@ -233,7 +233,7 @@ public class InventorySteps {
 
     private long outboxCount(String eventType, UUID aggregateId) {
         Long count = jdbc.queryForObject("SELECT count(*) FROM outbox_events WHERE event_type = ? AND aggregate_id = ?",
-                Long.class, eventType, aggregateId.toString());
+                Long.class, eventType, aggregateId);
         return count == null ? 0 : count;
     }
 

@@ -5,12 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
@@ -63,9 +63,6 @@ class InventoryMessagingIT {
     @Autowired
     KafkaListenerEndpointRegistry listeners;
 
-    @Value("${spring.kafka.bootstrap-servers}")
-    String bootstrapServers;
-
     private UUID organization;
     private UUID warehouse;
     private UUID worksite;
@@ -111,8 +108,7 @@ class InventoryMessagingIT {
         UUID assignment = UUID.randomUUID();
         publishOrganization(TestEvents.assignment(json, "StaffAssigned", organization, assignment, rosa, warehouse,
                 "WAREHOUSE"));
-        await().atMost(TIMEOUT).until(() -> Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT active FROM assignment_projection WHERE assignment_id = ?", Boolean.class, assignment)));
+        await().atMost(TIMEOUT).until(() -> assignments(assignment) == 1);
         publishOrganization(TestEvents.assignment(json, "StaffUnassigned", organization, assignment, rosa, warehouse,
                 "WAREHOUSE"));
         publishOrganization(TestEvents.material(json, "MaterialUpdated", organization, cement, "CEM-001",
@@ -120,14 +116,19 @@ class InventoryMessagingIT {
         publishOrganization(TestEvents.location(json, "LocationUpdated", organization, warehouse, "WAREHOUSE",
                 "Almacén Central Norte", false));
 
-        await().atMost(TIMEOUT).until(() -> Boolean.FALSE.equals(jdbc.queryForObject(
-                "SELECT active FROM assignment_projection WHERE assignment_id = ?", Boolean.class, assignment)));
+        await().atMost(TIMEOUT).until(() -> assignments(assignment) == 0);
         await().atMost(TIMEOUT).until(() -> "Almacén Central Norte".equals(jdbc.queryForObject(
                 "SELECT name FROM location_projection WHERE location_id = ?", String.class, warehouse)));
         await().atMost(TIMEOUT).until(() -> Boolean.FALSE.equals(jdbc.queryForObject(
                 "SELECT active FROM material_projection WHERE material_id = ?", Boolean.class, cement)));
         assertThat(jdbc.queryForObject("SELECT tolerance_percent FROM material_projection WHERE material_id = ?",
                 BigDecimal.class, cement)).isEqualByComparingTo("3");
+    }
+
+    private long assignments(UUID assignment) {
+        Long found = jdbc.queryForObject("SELECT count(*) FROM assignment_projection WHERE assignment_id = ?",
+                Long.class, assignment);
+        return found == null ? 0 : found;
     }
 
     @Test
@@ -267,6 +268,10 @@ class InventoryMessagingIT {
     }
 
     private Consumer<String, String> consumer() {
+        // Del productor y no de la propiedad: con varios contextos en caché, cada uno con su broker embebido, la
+        // propiedad apunta al último broker creado y no necesariamente al de este contexto.
+        Object bootstrapServers = kafka.getProducerFactory().getConfigurationProperties()
+                .get(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG);
         Map<String, Object> props = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
                 ConsumerConfig.GROUP_ID_CONFIG, "inventory-it-" + UUID.randomUUID(),

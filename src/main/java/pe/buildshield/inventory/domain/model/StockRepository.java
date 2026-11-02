@@ -2,7 +2,9 @@ package pe.buildshield.inventory.domain.model;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -63,19 +65,26 @@ public interface StockRepository {
      */
     MovementPage findMovementPage(Collection<UUID> locationIds, MovementFilter filter, int page, int size);
 
+    /**
+     * Almacenes de los que salió lo que la obra recibió de cada material: la entrada en obra (ENTRY) y la salida del
+     * almacén (DISPATCH o DEDUCTION) comparten el despacho en {@code source_ref}.
+     */
+    Map<UUID, Set<UUID>> originWarehouses(UUID worksiteId, Set<UUID> materialIds);
+
     void saveReservation(StockReservation reservation);
 
+    /** Fila vigente (RESERVED) de la línea de pedido; vacío si ya se consumió o liberó todo o no se reservó. */
     Optional<StockReservation> findReservation(UUID orderLineId);
 
-    /** Reservas de un pedido, en el orden en que se hicieron. */
+    /** Filas de reserva de un pedido, en el orden en que se hicieron. */
     List<StockReservation> findReservationsByOrder(UUID orderId);
 
-    /** Reservas cuyo almacén está entre {@code locationIds}, de la más reciente a la más antigua. */
+    /** Filas de reserva cuyo almacén está entre {@code locationIds}, de la más reciente a la más antigua. */
     List<StockReservation> findReservationsByLocations(Collection<UUID> locationIds);
 
     /**
-     * Suma {@code quantity} a lo consumido de la reserva de la línea, solo si sigue vigente y le queda
-     * suficiente; si queda consumida por completo pasa a CONSUMED.
+     * Consume {@code quantity} de la fila vigente de la línea, solo si le queda suficiente: si la consume por completo
+     * pasa a CONSUMED; si no, le resta lo consumido y agrega una fila CONSUMED con ello.
      *
      * @return {@code false} si la reserva ya no admite ese consumo (no hubo efecto)
      */

@@ -5,16 +5,14 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Línea del saldo que la obra devuelve: lo declarado y, cuando el almacén verifica lo recibido, lo aceptado y lo
- * rechazado con su motivo. Lo aceptado más lo rechazado siempre es lo declarado.
+ * Línea del saldo que la obra devuelve: lo declarado y, cuando el almacén verifica lo recibido, lo aceptado. Lo
+ * rechazado es la diferencia.
  *
- * @param detail          estado o detalle del material declarado por la obra (opcional)
  * @param acceptedQty     nulo hasta la verificación en el almacén
- * @param rejectedQty     nulo hasta la verificación en el almacén
- * @param rejectionReason obligatorio si se rechazó algo
+ * @param rejectionReason obligatorio si se rechazó algo; solo viaja en el evento de la verificación, no se guarda
  */
-public record MaterialReturnLine(UUID id, UUID materialId, BigDecimal quantity, String detail, BigDecimal acceptedQty,
-        BigDecimal rejectedQty, String rejectionReason) {
+public record MaterialReturnLine(UUID id, UUID materialId, BigDecimal quantity, BigDecimal acceptedQty,
+        String rejectionReason) {
 
     public MaterialReturnLine {
         Objects.requireNonNull(id, "id");
@@ -23,9 +21,8 @@ public record MaterialReturnLine(UUID id, UUID materialId, BigDecimal quantity, 
         if (quantity.signum() <= 0) {
             throw new IllegalStateException("Una línea de devolución tiene cantidad mayor que cero");
         }
-        if ((acceptedQty == null) != (rejectedQty == null)
-                || acceptedQty != null && acceptedQty.add(rejectedQty).compareTo(quantity) != 0) {
-            throw new IllegalStateException("Lo aceptado más lo rechazado debe ser lo devuelto");
+        if (acceptedQty != null && acceptedQty.compareTo(quantity) > 0) {
+            throw new IllegalStateException("Lo aceptado no puede superar lo devuelto");
         }
     }
 
@@ -33,7 +30,12 @@ public record MaterialReturnLine(UUID id, UUID materialId, BigDecimal quantity, 
         return acceptedQty != null;
     }
 
+    /** Lo devuelto que el almacén no aceptó; nulo hasta la verificación. */
+    public BigDecimal rejectedQty() {
+        return acceptedQty == null ? null : quantity.subtract(acceptedQty);
+    }
+
     public boolean hasRejection() {
-        return rejectedQty != null && rejectedQty.signum() > 0;
+        return acceptedQty != null && acceptedQty.compareTo(quantity) < 0;
     }
 }

@@ -40,14 +40,17 @@ public class IdempotentEventProcessor {
         this.json = json;
     }
 
-    /** @return {@code true} si se procesó; {@code false} si era un duplicado */
-    public boolean process(ConsumerRecord<String, String> record, Consumer<EventEnvelope> handler) {
+    /**
+     * @param consumer nombre del {@code <Y>EventConsumer} del C4; es parte de la llave de {@code processed_events}
+     * @return {@code true} si se procesó; {@code false} si era un duplicado
+     */
+    public boolean process(String consumer, ConsumerRecord<String, String> record, Consumer<EventEnvelope> handler) {
         Header correlation = record.headers().lastHeader(CorrelationId.HEADER);
         String correlationId = correlation == null ? null : new String(correlation.value(), StandardCharsets.UTF_8);
-        return process(record.value(), correlationId, handler);
+        return process(consumer, record.value(), correlationId, handler);
     }
 
-    public boolean process(String message, String correlationId, Consumer<EventEnvelope> handler) {
+    public boolean process(String consumer, String message, String correlationId, Consumer<EventEnvelope> handler) {
         EventEnvelope envelope = parse(message);
         TenantInfo tenant = new TenantInfo(envelope.organizationId(),
                 envelope.actorId() == null ? TenantContext.SYSTEM_USER_ID : envelope.actorId(), SYSTEM_ROLE);
@@ -55,7 +58,7 @@ public class IdempotentEventProcessor {
         // La organización se fija antes de abrir la transacción: el filtro de Hibernate se activa al abrir la sesión.
         CorrelationId.runWith(correlationId, () -> TenantContext.runAs(tenant, () -> processed[0] = Boolean.TRUE.equals(
                 transactionTemplate.execute(status -> {
-                    if (!processedEvents.markProcessed(envelope.eventId())) {
+                    if (!processedEvents.markProcessed(envelope.eventId(), consumer)) {
                         log.debug("Evento {} {} ya procesado: se ignora", envelope.eventType(), envelope.eventId());
                         return false;
                     }

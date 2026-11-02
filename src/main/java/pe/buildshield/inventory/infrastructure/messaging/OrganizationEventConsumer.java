@@ -36,6 +36,9 @@ public class OrganizationEventConsumer {
     static final String STAFF_ASSIGNED = "StaffAssigned";
     static final String STAFF_UNASSIGNED = "StaffUnassigned";
 
+    /** Nombre en la llave de {@code processed_events}. */
+    static final String CONSUMER = "OrganizationEventConsumer";
+
     private static final Logger log = LoggerFactory.getLogger(OrganizationEventConsumer.class);
 
     private final IdempotentEventProcessor processor;
@@ -48,22 +51,24 @@ public class OrganizationEventConsumer {
 
     @KafkaListener(topics = "${buildshield.messaging.consumes.organization:buildshield.organization}")
     public void onMessage(ConsumerRecord<String, String> record) {
-        processor.process(record, this::handle);
+        processor.process(CONSUMER, record, this::handle);
     }
 
     void handle(EventEnvelope event) {
         JsonNode payload = event.payload();
         switch (event.eventType()) {
             case LOCATION_REGISTERED, LOCATION_UPDATED -> projections.upsertLocation(event.organizationId(),
-                    uuid(payload, "locationId"), text(payload, "type"), text(payload, "name"), text(payload, "address"),
+                    uuid(payload, "locationId"), text(payload, "type"), text(payload, "name"),
                     payload.path("active").asBoolean(true));
             case MATERIAL_REGISTERED, MATERIAL_UPDATED -> projections.upsertMaterial(event.organizationId(),
                     uuid(payload, "materialId"), text(payload, "sku"), text(payload, "name"), text(payload, "unit"),
                     payload.hasNonNull("tolerancePercent") ? payload.get("tolerancePercent").decimalValue()
                             : BigDecimal.ZERO, payload.path("active").asBoolean(true));
-            case STAFF_ASSIGNED, STAFF_UNASSIGNED -> projections.upsertAssignment(event.organizationId(),
+            case STAFF_ASSIGNED -> projections.upsertAssignment(event.organizationId(),
                     uuid(payload, "assignmentId"), uuid(payload, "userId"), uuid(payload, "locationId"),
-                    text(payload, "locationType"), STAFF_ASSIGNED.equals(event.eventType()));
+                    text(payload, "locationType"));
+            case STAFF_UNASSIGNED -> projections.deleteAssignment(event.organizationId(),
+                    uuid(payload, "assignmentId"));
             default -> log.debug("Evento {} ignorado por inventory", event.eventType());
         }
     }

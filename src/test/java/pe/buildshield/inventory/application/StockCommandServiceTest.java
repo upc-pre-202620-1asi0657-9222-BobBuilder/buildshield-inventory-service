@@ -31,7 +31,6 @@ import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
 import pe.buildshield.inventory.support.InMemorySiteDirectory;
 import pe.buildshield.inventory.support.InMemoryStockRepository;
-import pe.buildshield.inventory.support.InMemoryWorksiteSupplyRepository;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -60,9 +59,8 @@ class StockCommandServiceTest {
     private final InMemoryStockRepository stock = new InMemoryStockRepository();
     private final InMemorySiteDirectory directory = new InMemorySiteDirectory();
     private final OutboxWriter outbox = mock(OutboxWriter.class);
-    private final InMemoryWorksiteSupplyRepository supplies = new InMemoryWorksiteSupplyRepository();
     private final StockCommandService service = new StockCommandService(
-            new StockOperations(stock, Clock.fixed(NOW, ZoneOffset.UTC)), stock, directory, outbox, supplies);
+            new StockOperations(stock, Clock.fixed(NOW, ZoneOffset.UTC)), stock, directory, outbox);
 
     private Site central;
     private Site torre;
@@ -110,7 +108,7 @@ class StockCommandServiceTest {
         assertThat(level.availableQty()).isEqualByComparingTo("140");
         assertThat(stock.movements).extracting(StockMovement::type)
                 .containsExactly(StockMovement.Type.INITIAL, StockMovement.Type.REPLENISHMENT);
-        assertThat(stock.movements.get(1).reference()).isEqualTo("Guía 002");
+        assertThat(stock.movements.get(1).sourceRef()).isNull();
     }
 
     @Test
@@ -233,12 +231,33 @@ class StockCommandServiceTest {
         };
         racing.put(central.id(), cement.id(), "100", "0");
         StockCommandService racy = new StockCommandService(new StockOperations(racing, Clock.systemUTC()), racing,
-                directory, outbox, supplies);
+                directory, outbox);
 
         assertThatThrownBy(() -> racy.reserveForOrder(new OrderApproved(UUID.randomUUID(), central.id(), List.of(
                 new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("50"))))))
                 .isInstanceOf(InsufficientStockException.class);
         verify(outbox, never()).append(anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    void a_repeated_approval_after_a_partial_dispatch_confirms_the_whole_quantity_of_the_line() {
+        stock.put(central.id(), cement.id(), "100", "0");
+        UUID order = UUID.randomUUID();
+        UUID line = UUID.randomUUID();
+        OrderApproved approved = new OrderApproved(order, central.id(), List.of(
+                new OrderLine(line, cement.id(), new BigDecimal("50"))));
+        service.reserveForOrder(approved);
+        service.deductForDispatch(new DispatchDeparted(UUID.randomUUID(), order, central.id(),
+                List.of(new OrderLine(line, cement.id(), new BigDecimal("30")))));
+
+        assertThat(service.reserveForOrder(approved)).isTrue();
+
+        ArgumentCaptor<Object> payloads = ArgumentCaptor.forClass(Object.class);
+        verify(outbox, org.mockito.Mockito.times(2)).append(eq(InventoryEvents.STOCK_RESERVED), anyString(), any(),
+                payloads.capture());
+        StockReserved again = (StockReserved) payloads.getAllValues().get(1);
+        assertThat(again.reservations()).singleElement().satisfies(reserved ->
+                assertThat(reserved.quantity()).isEqualByComparingTo("50"));
     }
 
     // ---------- Saga: salida del despacho ----------
@@ -252,8 +271,7 @@ class StockCommandServiceTest {
                 new OrderLine(line, cement.id(), new BigDecimal("50")))));
         UUID dispatch = UUID.randomUUID();
 
-        service.deductForDispatch(new DispatchDeparted(dispatch, order, central.id(), "MAN-20261103-7KQ2M9XA",
-                List.of(new OrderLine(line, cement.id(), new BigDecimal("30")))));
+        service.deductForDispatch(new DispatchDeparted(dispatch, order, central.id(), List.of(new OrderLine(line, cement.id(), new BigDecimal("30")))));
 
         assertThat(item(central, cement).availableQty()).isEqualByComparingTo("50");
         assertThat(item(central, cement).reservedQty()).isEqualByComparingTo("20");
@@ -262,7 +280,7 @@ class StockCommandServiceTest {
         assertThat(event.orderId()).isEqualTo(order);
         assertThat(event.lines().get(0).quantity()).isEqualByComparingTo("30");
         assertThat(event.lines().get(0).reservedAfter()).isEqualByComparingTo("20");
-        assertThat(stock.movements).extracting(StockMovement::reference).contains("Despacho MAN-20261103-7KQ2M9XA");
+        assertThat(stock.movements).extracting(StockMovement::sourceRef).contains(dispatch);
     }
 
     @Test
@@ -270,13 +288,12 @@ class StockCommandServiceTest {
         stock.put(central.id(), cement.id(), "10", "0");
         UUID dispatch = UUID.randomUUID();
 
-        service.deductForDispatch(new DispatchDeparted(dispatch, UUID.randomUUID(), central.id(), null,
-                List.of(new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("4")))));
+        service.deductForDispatch(new DispatchDeparted(dispatch, UUID.randomUUID(), central.id(), List.of(new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("4")))));
         assertThat(item(central, cement).availableQty()).isEqualByComparingTo("6");
-        assertThat(stock.movements).extracting(StockMovement::reference).contains("Despacho " + dispatch);
+        assertThat(stock.movements).extracting(StockMovement::sourceRef).contains(dispatch);
 
         assertThatThrownBy(() -> service.deductForDispatch(new DispatchDeparted(UUID.randomUUID(), UUID.randomUUID(),
-                central.id(), null, List.of(new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("7"))))))
+                central.id(), List.of(new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("7"))))))
                 .isInstanceOf(InsufficientStockException.class);
     }
 
@@ -285,10 +302,10 @@ class StockCommandServiceTest {
         StockOperations failing = mock(StockOperations.class);
         org.mockito.Mockito.when(failing.consumeReservation(any(), any(), any(), any(), any()))
                 .thenThrow(new ConflictException("STOCK_CONCURRENT_MODIFICATION", "cambió"));
-        StockCommandService withFailure = new StockCommandService(failing, stock, directory, outbox, supplies);
+        StockCommandService withFailure = new StockCommandService(failing, stock, directory, outbox);
 
         assertThatThrownBy(() -> withFailure.deductForDispatch(new DispatchDeparted(UUID.randomUUID(),
-                UUID.randomUUID(), central.id(), "MAN", List.of(new OrderLine(UUID.randomUUID(), cement.id(),
+                UUID.randomUUID(), central.id(), List.of(new OrderLine(UUID.randomUUID(), cement.id(),
                 BigDecimal.ONE))))).hasFieldOrPropertyWithValue("code", "STOCK_CONCURRENT_MODIFICATION");
     }
 
@@ -299,9 +316,9 @@ class StockCommandServiceTest {
         UUID reception = UUID.randomUUID();
         UUID dispatch = UUID.randomUUID();
 
-        service.receiveAtWorksite(new ReceptionReceived(reception, dispatch, torre.id(), null, InventoryEvents.SOURCE_PARTIAL,
+        service.receiveAtWorksite(new ReceptionReceived(reception, dispatch, torre.id(), InventoryEvents.SOURCE_PARTIAL,
                 List.of(new ReceivedLine(cement.id(), new BigDecimal("20")), new ReceivedLine(steel.id(), BigDecimal.ZERO))));
-        service.receiveAtWorksite(new ReceptionReceived(reception, dispatch, torre.id(), null,
+        service.receiveAtWorksite(new ReceptionReceived(reception, dispatch, torre.id(),
                 InventoryEvents.SOURCE_CONFIRMATION, List.of(new ReceivedLine(cement.id(), new BigDecimal("9.5")),
                 new ReceivedLine(steel.id(), null))));
 
@@ -321,7 +338,7 @@ class StockCommandServiceTest {
 
     @Test
     void a_reception_without_new_quantities_changes_nothing_and_publishes_nothing() {
-        service.receiveAtWorksite(new ReceptionReceived(UUID.randomUUID(), UUID.randomUUID(), torre.id(), null,
+        service.receiveAtWorksite(new ReceptionReceived(UUID.randomUUID(), UUID.randomUUID(), torre.id(),
                 InventoryEvents.SOURCE_CONFIRMATION, List.of(new ReceivedLine(cement.id(), BigDecimal.ZERO))));
 
         assertThat(stock.movements).isEmpty();
@@ -340,7 +357,7 @@ class StockCommandServiceTest {
         service.reserveForOrder(new OrderApproved(order, central.id(), List.of(
                 new OrderLine(cementLine, cement.id(), new BigDecimal("50")),
                 new OrderLine(steelLine, steel.id(), new BigDecimal("10")))));
-        service.deductForDispatch(new DispatchDeparted(UUID.randomUUID(), order, central.id(), null, List.of(
+        service.deductForDispatch(new DispatchDeparted(UUID.randomUUID(), order, central.id(), List.of(
                 new OrderLine(cementLine, cement.id(), new BigDecimal("30")),
                 new OrderLine(steelLine, steel.id(), new BigDecimal("10")))));
 
@@ -349,7 +366,8 @@ class StockCommandServiceTest {
         assertThat(item(central, cement).availableQty()).isEqualByComparingTo("70");
         assertThat(item(central, cement).reservedQty()).isZero();
         assertThat(stock.reservations()).extracting(StockReservation::status)
-                .containsExactlyInAnyOrder(StockReservation.Status.RELEASED, StockReservation.Status.CONSUMED);
+                .containsExactlyInAnyOrder(StockReservation.Status.RELEASED, StockReservation.Status.CONSUMED,
+                        StockReservation.Status.CONSUMED);
         StockReleased event = captured(InventoryEvents.STOCK_RELEASED, StockReleased.class);
         assertThat(event.reason()).isEqualTo(InventoryEvents.RELEASE_ORDER_CLOSED);
         assertThat(event.warehouseId()).isEqualTo(central.id());
@@ -367,6 +385,20 @@ class StockCommandServiceTest {
         service.releaseForOrder(new OrderEnded(UUID.randomUUID(), InventoryEvents.RELEASE_ORDER_REJECTED));
 
         verify(outbox, never()).append(anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    void what_the_worksite_receives_keeps_the_dispatch_so_the_origin_warehouse_is_known() {
+        stock.put(central.id(), cement.id(), "10", "0");
+        UUID dispatch = UUID.randomUUID();
+        service.deductForDispatch(new DispatchDeparted(dispatch, UUID.randomUUID(), central.id(),
+                List.of(new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("4")))));
+
+        service.receiveAtWorksite(new ReceptionReceived(UUID.randomUUID(), dispatch, torre.id(),
+                InventoryEvents.SOURCE_CONFIRMATION, List.of(new ReceivedLine(cement.id(), new BigDecimal("4")))));
+
+        assertThat(stock.originWarehouses(torre.id(), java.util.Set.of(cement.id())).get(cement.id()))
+                .containsExactly(central.id());
     }
 
     private StockItem item(Site site, MaterialInfo material) {

@@ -30,7 +30,7 @@ import java.util.stream.Collectors;
 public class JdbcOrganizationProjections implements SiteDirectory {
 
     private static final RowMapper<Site> SITE = (rs, row) -> new Site(rs.getObject("location_id", UUID.class),
-            rs.getString("type"), rs.getString("name"), rs.getString("address"), rs.getBoolean("active"));
+            rs.getString("type"), rs.getString("name"), rs.getBoolean("active"));
 
     private static final RowMapper<MaterialInfo> MATERIAL = (rs, row) -> new MaterialInfo(
             rs.getObject("material_id", UUID.class), rs.getString("sku"), rs.getString("name"), rs.getString("unit"),
@@ -49,7 +49,7 @@ public class JdbcOrganizationProjections implements SiteDirectory {
     @Override
     public Optional<Site> findLocation(UUID locationId) {
         return jdbc.query("""
-                SELECT location_id, type, name, address, active FROM location_projection
+                SELECT location_id, type, name, active FROM location_projection
                 WHERE location_id = ? AND organization_id = ?""", SITE, locationId, organizationId())
                 .stream().findFirst();
     }
@@ -57,7 +57,7 @@ public class JdbcOrganizationProjections implements SiteDirectory {
     @Override
     public List<Site> locations(String type) {
         return jdbc.query("""
-                SELECT location_id, type, name, address, active FROM location_projection
+                SELECT location_id, type, name, active FROM location_projection
                 WHERE organization_id = ? AND type = ? ORDER BY name, location_id""", SITE, organizationId(), type);
     }
 
@@ -85,26 +85,25 @@ public class JdbcOrganizationProjections implements SiteDirectory {
     public boolean isAssigned(UUID userId, UUID locationId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
                 SELECT EXISTS (SELECT 1 FROM assignment_projection
-                               WHERE organization_id = ? AND user_id = ? AND location_id = ? AND active)""",
+                               WHERE organization_id = ? AND user_id = ? AND location_id = ?)""",
                 Boolean.class, organizationId(), userId, locationId));
     }
 
     @Override
     public Set<UUID> assignedLocations(UUID userId) {
         return new HashSet<>(jdbc.queryForList("""
-                SELECT location_id FROM assignment_projection WHERE organization_id = ? AND user_id = ? AND active""",
+                SELECT location_id FROM assignment_projection WHERE organization_id = ? AND user_id = ?""",
                 UUID.class, organizationId(), userId));
     }
 
     /** {@code LocationRegistered} o {@code LocationUpdated}. */
-    public void upsertLocation(UUID organizationId, UUID locationId, String type, String name, String address,
-            boolean active) {
+    public void upsertLocation(UUID organizationId, UUID locationId, String type, String name, boolean active) {
         jdbc.update("""
-                INSERT INTO location_projection (location_id, organization_id, type, name, address, active, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO location_projection (location_id, organization_id, type, name, active, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT (location_id) DO UPDATE SET type = EXCLUDED.type, name = EXCLUDED.name,
-                    address = EXCLUDED.address, active = EXCLUDED.active, updated_at = EXCLUDED.updated_at""",
-                locationId, organizationId, type, name, address, active, now());
+                    active = EXCLUDED.active, updated_at = EXCLUDED.updated_at""",
+                locationId, organizationId, type, name, active, now());
     }
 
     /** {@code MaterialRegistered} o {@code MaterialUpdated}. */
@@ -120,17 +119,23 @@ public class JdbcOrganizationProjections implements SiteDirectory {
                 materialId, organizationId, sku, name, unit, tolerancePercent, active, now());
     }
 
-    /** {@code StaffAssigned} (activa) o {@code StaffUnassigned} (inactiva). */
+    /** {@code StaffAssigned}. */
     public void upsertAssignment(UUID organizationId, UUID assignmentId, UUID userId, UUID locationId,
-            String locationType, boolean active) {
+            String locationType) {
         jdbc.update("""
                 INSERT INTO assignment_projection (assignment_id, organization_id, user_id, location_id, location_type,
-                                                   active, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                                   updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT (assignment_id) DO UPDATE SET user_id = EXCLUDED.user_id,
                     location_id = EXCLUDED.location_id, location_type = EXCLUDED.location_type,
-                    active = EXCLUDED.active, updated_at = EXCLUDED.updated_at""",
-                assignmentId, organizationId, userId, locationId, locationType, active, now());
+                    updated_at = EXCLUDED.updated_at""",
+                assignmentId, organizationId, userId, locationId, locationType, now());
+    }
+
+    /** {@code StaffUnassigned}: la asignación deja de existir en la copia. */
+    public void deleteAssignment(UUID organizationId, UUID assignmentId) {
+        jdbc.update("DELETE FROM assignment_projection WHERE assignment_id = ? AND organization_id = ?", assignmentId,
+                organizationId);
     }
 
     private Timestamp now() {

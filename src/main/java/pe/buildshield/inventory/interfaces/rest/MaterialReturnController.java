@@ -101,9 +101,9 @@ class MaterialReturnController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     ReturnView register(@Valid @RequestBody RegisterReturnRequest request) {
         List<MaterialReturn.DeclaredLine> lines = request.lines().stream()
-                .map(line -> new MaterialReturn.DeclaredLine(line.materialId(), line.quantity(), line.detail()))
+                .map(line -> new MaterialReturn.DeclaredLine(line.materialId(), line.quantity()))
                 .toList();
-        return queries.view(commands.register(request.worksiteId(), request.warehouseId(), lines, request.note()));
+        return queries.view(commands.register(request.worksiteId(), request.warehouseId(), lines));
     }
 
     @GetMapping("/returns")
@@ -219,8 +219,8 @@ class MaterialReturnController {
     @PreAuthorize(WAREHOUSE_SIDE)
     @Operation(summary = "Verificar lo recibido en el almacén",
             description = "US43 AC02 y AC03: por cada material, lo aceptado (de cero a lo devuelto) y el motivo de lo "
-                    + "que no se acepta. Solo lo aceptado vuelve al stock del almacén (RETURN_IN); lo rechazado queda "
-                    + "registrado con su motivo. Publica MaterialReturnReceived.")
+                    + "que no se acepta. Solo lo aceptado vuelve al stock del almacén (RETURN_IN); lo rechazado es la "
+                    + "diferencia y su motivo va en el evento MaterialReturnReceived.")
     @ApiResponse(responseCode = "200", description = "Devolución recibida (RECEIVED)",
             content = @Content(schema = @Schema(implementation = ReturnView.class),
                     examples = @ExampleObject(value = CountAndReturnApiExamples.RETURN)))
@@ -264,17 +264,13 @@ class MaterialReturnController {
             @NotNull UUID worksiteId,
             @Schema(description = "Almacén de origen; opcional si la obra recibió esos materiales de un solo almacén")
             UUID warehouseId,
-            @NotEmpty List<@Valid ReturnLineRequest> lines,
-            @Schema(description = "Observación general", example = "Saldo al cierre del vaciado del piso 12")
-            @Size(max = 500) String note) {
+            @NotEmpty List<@Valid ReturnLineRequest> lines) {
     }
 
     @Schema(description = "Material del saldo")
     record ReturnLineRequest(
             @NotNull UUID materialId,
-            @Schema(example = "12") @NotNull @Positive @Digits(integer = 11, fraction = 3) BigDecimal quantity,
-            @Schema(description = "Estado o detalle del material", example = "Bolsas cerradas, 2 con humedad")
-            @Size(max = 200) String detail) {
+            @Schema(example = "12") @NotNull @Positive @Digits(integer = 11, fraction = 3) BigDecimal quantity) {
     }
 
     @Schema(description = "Rechazo de la solicitud")

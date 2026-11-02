@@ -22,11 +22,11 @@ public class InMemorySiteDirectory implements SiteDirectory {
     private final Map<UUID, Set<UUID>> assignments = new HashMap<>();
 
     public Site warehouse(String name, boolean active) {
-        return add(new Site(UUID.randomUUID(), WAREHOUSE, name, "Av. Argentina 2500", active));
+        return add(new Site(UUID.randomUUID(), WAREHOUSE, name, active));
     }
 
     public Site worksite(String name) {
-        return add(new Site(UUID.randomUUID(), WORKSITE, name, "Av. Javier Prado 123", true));
+        return add(new Site(UUID.randomUUID(), WORKSITE, name, true));
     }
 
     public MaterialInfo material(String sku, boolean active) {
