@@ -1,10 +1,11 @@
 # buildshield-inventory-service
 
 Inventario de BuildShield (BobBuilder): existencias por almacén y obra, inventario inicial y reposiciones,
-reservas de stock de los pedidos aprobados, historial de movimientos, conteos de validación con ajuste, devolución
+reservas de stock de los pedidos aprobados, historial de movimientos, conteos físicos con ajuste, devolución
 de saldos de obra al almacén de origen y participación en la saga de reserva. Contrato de la arquitectura:
 `wiki/informe-tf/plan-microservicios.md` del proyecto; nombres exactos de los eventos en
-`wiki/informe-tf/notas-etapa-b1.md`.
+`wiki/informe-tf/notas-etapa-b1.md`. El esquema sigue `wiki/informe-avance2/er-corregido.md`; lo que no cabe en él está en
+`DESVIACIONES.md`.
 
 | Dato | Valor |
 |---|---|
@@ -27,25 +28,21 @@ de saldos de obra al almacén de origen y participación en la saga de reserva. 
 - `GET /api/v1/stock/movements/history?locationId=&materialId=&type=&from=&to=&page=0&size=20`: historial paginado
   (`{items, page, size, total}`, tamaño de 1 a 200), del más reciente al más antiguo.
 
-### Conteo de validación y ajuste (US41)
+### Conteo físico y ajuste (US41)
 
-Administrador o encargado del almacén. Un solo conteo abierto por almacén.
+Administrador o encargado del almacén. El ERD no guarda un conteo abierto (ver `DESVIACIONES.md`).
 
 | Método y ruta | Qué hace |
 |---|---|
-| `POST /api/v1/stock/counts` | inicia el conteo (`IN_PROGRESS`) de los materiales indicados o de todos los que tienen stock |
-| `GET /api/v1/stock/counts?warehouseId=&status=` y `GET /api/v1/stock/counts/{id}` | consulta |
-| `PUT /api/v1/stock/counts/{id}/lines` | registra o corrige lo contado |
-| `POST /api/v1/stock/counts/{id}/finish` | compara con disponible más reservado: `MATCHED` o `DIFFERENCES_FOUND` |
-| `POST /api/v1/stock/counts/{id}/review` | nota de la revisión de las diferencias: `REVIEWED` |
-| `POST /api/v1/stock/counts/{id}/adjustment` | con motivo, aplica la diferencia (`ADJUSTMENT_IN` u `ADJUSTMENT_OUT`) y publica `StockAdjusted`: `ADJUSTED` |
-| `POST /api/v1/stock/counts/{id}/cancel` | anula un conteo abierto: `CANCELLED` |
+| `POST /api/v1/stock/counts/comparison` | compara lo contado con disponible más reservado sin guardar nada: `MATCHED` o `DIFFERENCES_FOUND` |
+| `POST /api/v1/stock/counts` | guarda un ajuste por material y aplica cada diferencia (`ADJUSTMENT_IN` u `ADJUSTMENT_OUT`) con su motivo y `StockAdjusted`: `ADJUSTED` o `MATCHED` |
+| `GET /api/v1/stock/counts?warehouseId=&materialId=` y `GET /api/v1/stock/counts/{id}` | consulta de los ajustes, una fila por material |
 
 ### Saldos de obra y devolución al almacén de origen (US43)
 
 Estados: `REGISTERED` → `REQUESTED` → `APPROVED` o `REJECTED` → `IN_TRANSIT` → `RECEIVED` (y `CANCELLED` antes de
-aprobar). El almacén de origen es el que despachó el material a la obra: se anota en `worksite_supplies` con el
-`warehouseId` de `ReceptionPartiallyReceived` y `ReceptionConfirmed`.
+aprobar). El almacén de origen es el que despachó el material a la obra: la entrada en obra y la salida del almacén
+comparten el despacho en `stock_movements.source_ref`.
 
 | Método y ruta | Rol | Qué hace |
 |---|---|---|
@@ -56,7 +53,7 @@ aprobar). El almacén de origen es el que despachó el material a la obra: se an
 | `POST /api/v1/stock/returns/{id}/approve` | administrador, encargado de almacén | aprueba |
 | `POST /api/v1/stock/returns/{id}/reject` | administrador, encargado de almacén | rechaza con motivo; el saldo queda en la obra |
 | `POST /api/v1/stock/returns/{id}/dispatch` | administrador, encargado de obra | inicia el retorno: sale de la obra (`RETURN_OUT`) |
-| `POST /api/v1/stock/returns/{id}/receive` | administrador, encargado de almacén | verifica: solo lo aceptado entra al almacén (`RETURN_IN`); lo rechazado queda con su motivo |
+| `POST /api/v1/stock/returns/{id}/receive` | administrador, encargado de almacén | verifica: solo lo aceptado entra al almacén (`RETURN_IN`); el motivo de lo rechazado va en el evento |
 | `POST /api/v1/stock/returns/{id}/cancel` | administrador, encargado de obra | anula antes de aprobar |
 
 Todas las rutas están bajo `/api/v1/stock/**`, que el gateway ya enruta a inventory.
@@ -102,7 +99,8 @@ Las `*IT` usan la base temporal `inventory_it` en `127.0.0.1:5433` con el usuari
 (`@EmbeddedKafka`). Sin la propiedad usan Testcontainers (requiere Docker). Incluyen la saga de punta a punta dentro
 del servicio (`InventoryMessagingIT`), la concurrencia de reservas (QAS02), el aislamiento entre organizaciones, la
 documentación OpenAPI completa y los escenarios Cucumber (`features/inventory`: saga, carga de existencias,
-inventario inicial y reposición, conteo y ajuste, saldos y devolución). JaCoCo exige 80 % de líneas en `domain` y
+inventario inicial y reposición, conteo y ajuste, saldos y devolución) y la migración al esquema del ERD
+(`ErdAlignmentMigrationIT`). JaCoCo exige 80 % de líneas en `domain` y
 `application`. Antes de cada escenario y de cada prueba de mensajería se espera a que los consumidores tengan sus
 particiones asignadas (`KafkaConsumersReady`).
 
