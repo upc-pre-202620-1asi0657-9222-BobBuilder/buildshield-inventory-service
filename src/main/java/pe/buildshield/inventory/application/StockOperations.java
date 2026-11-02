@@ -45,12 +45,13 @@ public class StockOperations {
     /**
      * Descuento directo de lo disponible (sin reserva).
      *
+     * @param reference texto para el historial
      * @param sourceRef lo que originó el movimiento (ver {@link StockMovement})
      * @throws InsufficientStockException          si no alcanza; no modifica nada
      * @throws ConcurrentStockModificationException si se agotaron los reintentos
      */
-    public StockLevel deduct(UUID locationId, UUID materialId, BigDecimal requested, UUID sourceRef) {
-        return deduct(locationId, materialId, requested, StockMovement.Type.DEDUCTION, sourceRef);
+    public StockLevel deduct(UUID locationId, UUID materialId, BigDecimal requested, String reference, UUID sourceRef) {
+        return deduct(locationId, materialId, requested, StockMovement.Type.DEDUCTION, reference, sourceRef);
     }
 
     /**
@@ -61,7 +62,7 @@ public class StockOperations {
      * @throws ConcurrentStockModificationException si se agotaron los reintentos
      */
     public StockLevel deduct(UUID locationId, UUID materialId, BigDecimal requested, StockMovement.Type type,
-            UUID sourceRef) {
+            String reference, UUID sourceRef) {
         Quantity quantity = new Quantity(requested);
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             Optional<StockItem> current = stock.find(locationId, materialId);
@@ -71,9 +72,10 @@ public class StockOperations {
                 throw new InsufficientStockException(locationId, materialId, item.availableQty(), quantity.value());
             }
             if (stock.tryDeduct(item.id(), item.version(), quantity)) {
-                stock.record(new StockMovement(item.id(), type, quantity.value(), sourceRef, clock.instant()));
-                return new StockLevel(locationId, materialId, item.availableAfterDeducting(quantity),
-                        item.reservedQty(), item.id());
+                BigDecimal balance = item.availableAfterDeducting(quantity);
+                stock.record(new StockMovement(item.id(), type, quantity.value(), balance, reference, sourceRef,
+                        clock.instant()));
+                return new StockLevel(locationId, materialId, balance, item.reservedQty());
             }
         }
         throw new ConcurrentStockModificationException(locationId, materialId, MAX_RETRIES + 1);
@@ -97,8 +99,8 @@ public class StockOperations {
                 BigDecimal available = item.availableAfterDeducting(quantity);
                 BigDecimal reserved = item.reservedAfterReserving(quantity);
                 stock.saveReservation(StockReservation.reserve(item, orderId, orderLineId, quantity, clock.instant()));
-                stock.record(new StockMovement(item.id(), StockMovement.Type.RESERVE, quantity.value(), orderId,
-                        clock.instant()));
+                stock.record(new StockMovement(item.id(), StockMovement.Type.RESERVE, quantity.value(), available,
+                        "Pedido " + orderId, orderId, clock.instant()));
                 return new StockLevel(locationId, materialId, available, reserved);
             }
         }
@@ -112,7 +114,7 @@ public class StockOperations {
      * @throws ConflictException {@code RESERVATION_NOT_AVAILABLE} si la línea no tiene reserva suficiente
      */
     public StockLevel consumeReservation(UUID locationId, UUID materialId, BigDecimal requested, UUID orderLineId,
-            UUID dispatchId) {
+            String reference, UUID dispatchId) {
         Quantity quantity = new Quantity(requested);
         StockReservation reservation = stock.findReservation(orderLineId)
                 .filter(found -> found.canConsume(quantity))
@@ -129,8 +131,8 @@ public class StockOperations {
                     throw reservationNotAvailable(orderLineId, quantity);
                 }
                 BigDecimal reserved = item.reservedAfterConsuming(quantity);
-                stock.record(new StockMovement(item.id(), StockMovement.Type.DISPATCH, quantity.value(), dispatchId,
-                        clock.instant()));
+                stock.record(new StockMovement(item.id(), StockMovement.Type.DISPATCH, quantity.value(),
+                        item.availableQty(), reference, dispatchId, clock.instant()));
                 return new StockLevel(locationId, materialId, item.availableQty(), reserved);
             }
         }
@@ -143,7 +145,7 @@ public class StockOperations {
      *
      * @return el saldo después de liberar, o vacío si la fila ya no estaba vigente
      */
-    public Optional<StockLevel> release(StockReservation reservation) {
+    public Optional<StockLevel> release(StockReservation reservation, String reference) {
         if (!reservation.isReleasable()) {
             return Optional.empty();
         }
@@ -158,8 +160,8 @@ public class StockOperations {
                             attempt + 1);
                 }
                 BigDecimal available = item.availableAfterReleasing(quantity);
-                stock.record(new StockMovement(item.id(), StockMovement.Type.RELEASE, quantity.value(),
-                        reservation.orderId(), clock.instant()));
+                stock.record(new StockMovement(item.id(), StockMovement.Type.RELEASE, quantity.value(), available,
+                        reference, reservation.orderId(), clock.instant()));
                 return Optional.of(new StockLevel(reservation.locationId(), reservation.materialId(), available,
                         item.reservedAfterConsuming(quantity)));
             }
@@ -169,8 +171,8 @@ public class StockOperations {
     }
 
     /** Suma a lo disponible del lugar (almacén u obra) como ENTRY; crea el ítem si no existía. */
-    public StockLevel add(UUID locationId, UUID materialId, BigDecimal added, UUID sourceRef) {
-        return add(locationId, materialId, added, StockMovement.Type.ENTRY, sourceRef);
+    public StockLevel add(UUID locationId, UUID materialId, BigDecimal added, String reference, UUID sourceRef) {
+        return add(locationId, materialId, added, StockMovement.Type.ENTRY, reference, sourceRef);
     }
 
     /**
@@ -178,10 +180,11 @@ public class StockOperations {
      * reposición, ajuste o reingreso por devolución); crea el ítem si no existía.
      */
     public StockLevel add(UUID locationId, UUID materialId, BigDecimal added, StockMovement.Type type,
-            UUID sourceRef) {
+            String reference, UUID sourceRef) {
         Quantity quantity = new Quantity(added);
         StockItem item = stock.add(locationId, materialId, quantity);
-        stock.record(new StockMovement(item.id(), type, quantity.value(), sourceRef, clock.instant()));
+        stock.record(new StockMovement(item.id(), type, quantity.value(), item.availableQty(), reference, sourceRef,
+                clock.instant()));
         return new StockLevel(locationId, materialId, item.availableQty(), item.reservedQty(), item.id());
     }
 

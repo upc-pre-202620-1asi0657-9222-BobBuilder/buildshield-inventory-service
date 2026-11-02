@@ -74,7 +74,7 @@ final class StockApiExamples {
                 "type": "DISPATCH",
                 "quantity": 30.000,
                 "balanceAfter": 450.000,
-                "reference": "3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b",
+                "reference": "Despacho MAN-20261103-7KQ2M9XA",
                 "occurredAt": "2026-11-03T08:10:00Z",
                 "recordedBy": "9c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
               }
@@ -93,7 +93,7 @@ final class StockApiExamples {
                   "type": "REPLENISHMENT",
                   "quantity": 200.000,
                   "balanceAfter": 650.000,
-                  "reference": null,
+                  "reference": "Guía 001-2345",
                   "occurredAt": "2026-11-05T09:00:00Z",
                   "recordedBy": "9c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
                 }

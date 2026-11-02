@@ -21,7 +21,8 @@ public final class OrderingSignals {
     }
 
     /** {@code DispatchDeparted}: consumir la reserva de cada línea despachada y descontar del almacén. */
-    public record DispatchDeparted(UUID dispatchId, UUID orderId, UUID warehouseId, List<OrderLine> lines) {
+    public record DispatchDeparted(UUID dispatchId, UUID orderId, UUID warehouseId, String manifestCode,
+            List<OrderLine> lines) {
     }
 
     /**

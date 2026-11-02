@@ -6,12 +6,13 @@ import java.util.UUID;
 
 /**
  * Línea del saldo que la obra devuelve: lo declarado y, cuando el almacén verifica lo recibido, lo aceptado. Lo
- * rechazado es la diferencia.
+ * rechazado no se guarda: es lo declarado menos lo aceptado.
  *
+ * @param detail          estado o detalle del material declarado por la obra (opcional)
  * @param acceptedQty     nulo hasta la verificación en el almacén
- * @param rejectionReason obligatorio si se rechazó algo; solo viaja en el evento de la verificación, no se guarda
+ * @param rejectionReason obligatorio si se rechazó algo
  */
-public record MaterialReturnLine(UUID id, UUID materialId, BigDecimal quantity, BigDecimal acceptedQty,
+public record MaterialReturnLine(UUID id, UUID materialId, BigDecimal quantity, String detail, BigDecimal acceptedQty,
         String rejectionReason) {
 
     public MaterialReturnLine {

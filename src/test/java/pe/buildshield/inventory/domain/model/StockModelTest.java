@@ -53,11 +53,21 @@ class StockModelTest {
     }
 
     @Test
-    void a_movement_keeps_what_originated_it() {
-        assertThat(new StockMovement(ID, StockMovement.Type.ENTRY, BigDecimal.TEN, ID, Instant.now()).sourceRef())
-                .isEqualTo(ID);
-        assertThat(new StockMovement(ID, StockMovement.Type.INITIAL, BigDecimal.TEN, null, Instant.now()).sourceRef())
-                .isNull();
+    void a_movement_cannot_leave_negative_stock() {
+        assertThatThrownBy(() -> new StockMovement(ID, StockMovement.Type.DEDUCTION, BigDecimal.TEN,
+                new BigDecimal("-1"), null, null, Instant.now())).isInstanceOf(IllegalStateException.class);
+        assertThat(new StockMovement(ID, StockMovement.Type.ENTRY, BigDecimal.TEN, BigDecimal.TEN, "Guía 1", null,
+                Instant.now()).type()).isEqualTo(StockMovement.Type.ENTRY);
+    }
+
+    @Test
+    void a_movement_keeps_its_text_and_what_originated_it() {
+        StockMovement dispatched = new StockMovement(ID, StockMovement.Type.DISPATCH, BigDecimal.TEN, BigDecimal.ONE,
+                "Despacho MAN-1", ID, Instant.now());
+        assertThat(dispatched.reference()).isEqualTo("Despacho MAN-1");
+        assertThat(dispatched.sourceRef()).isEqualTo(ID);
+        assertThat(new StockMovement(ID, StockMovement.Type.INITIAL, BigDecimal.TEN, BigDecimal.TEN, null, null,
+                Instant.now()).sourceRef()).isNull();
     }
 
     @Test
@@ -69,20 +79,6 @@ class StockModelTest {
             assertThat(next.toString()).isGreaterThan(previous.toString());
             previous = next;
         }
-    }
-
-    @Test
-    void an_adjustment_compares_what_was_counted_with_the_system() {
-        StockAdjustment adjustment = new StockAdjustment(ID, ID, ID, ID, new BigDecimal("445"), new BigDecimal("450"),
-                "Rotura", ID, Instant.now());
-        assertThat(adjustment.difference()).isEqualByComparingTo("-5");
-        assertThat(StockAdjustment.countedQuantity(new BigDecimal("2.5"))).isEqualTo(new BigDecimal("2.500"));
-        assertThatThrownBy(() -> StockAdjustment.countedQuantity(new BigDecimal("-1")))
-                .hasFieldOrPropertyWithValue("code", "INVALID_COUNTED_QUANTITY");
-        assertThatThrownBy(() -> StockAdjustment.countedQuantity(new BigDecimal("1.0001")))
-                .hasFieldOrPropertyWithValue("code", "INVALID_COUNTED_QUANTITY");
-        assertThatThrownBy(() -> StockAdjustment.countedQuantity(null))
-                .hasFieldOrPropertyWithValue("code", "INVALID_COUNTED_QUANTITY");
     }
 
     @Test

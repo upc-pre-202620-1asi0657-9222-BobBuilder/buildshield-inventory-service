@@ -31,6 +31,8 @@ Característica: Registro de saldos de obra y devolución al almacén de origen
     Dado que "rosa@andina.pe" inició sesión con la contraseña "Almacen123"
     Cuando verifico que acepto "10" del material "CEM-001" y rechazo el resto por "Bolsas húmedas, no aptas"
     Entonces la devolución queda en estado "RECEIVED" con rechazos
+    Y la devolución muestra la nota "Saldo de la obra", el detalle "2 bolsas con humedad" y el motivo de línea "Bolsas húmedas, no aptas"
+    Y la devolución muestra quién y cuándo la solicitó, decidió, retornó y recibió
     Y el stock disponible del material "CEM-001" en el almacén "Almacén Central" es "10"
     Y inventario publicó "MaterialReturnReceived" con "2" rechazado del material "CEM-001"
 
@@ -42,6 +44,7 @@ Característica: Registro de saldos de obra y devolución al almacén de origen
     Dado que "rosa@andina.pe" inició sesión con la contraseña "Almacen123"
     Cuando rechazo la devolución por "El cemento se usará en la losa del piso 13"
     Entonces la devolución queda en estado "REJECTED" con rechazos
+    Y la devolución muestra el motivo de rechazo "El cemento se usará en la losa del piso 13"
     Y el stock de la obra "Torre Norte" del material "CEM-001" es "40"
 
   Escenario: No se devuelve más de lo que queda en la obra

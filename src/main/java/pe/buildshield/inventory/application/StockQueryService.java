@@ -191,8 +191,7 @@ public class StockQueryService {
             MaterialInfo material = materials.get(movement.materialId());
             return new MovementView(movement.id(), movement.locationId(), site.type(), site.name(),
                     movement.materialId(), material == null ? null : material.sku(), movement.type().name(),
-                    movement.quantity(), movement.balanceAfter(),
-                    movement.sourceRef() == null ? null : movement.sourceRef().toString(), movement.createdAt(),
+                    movement.quantity(), movement.balanceAfter(), movement.reference(), movement.createdAt(),
                     movement.createdBy());
         }).toList();
     }
@@ -263,7 +262,7 @@ public class StockQueryService {
             BigDecimal remainingQty, String status, Instant reservedAt) {
     }
 
-    /** Movimiento de stock. {@code reference} es el identificador de lo que lo originó (nulo en las cargas). */
+    /** Movimiento de stock. */
     public record MovementView(UUID id, UUID locationId, String locationType, String locationName, UUID materialId,
             String sku, String type, BigDecimal quantity, BigDecimal balanceAfter, String reference,
             Instant occurredAt, UUID recordedBy) {

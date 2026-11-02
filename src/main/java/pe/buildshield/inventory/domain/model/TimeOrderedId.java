@@ -6,8 +6,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Identificadores UUID versión 7, crecientes dentro de cada instancia del servicio: milisegundos, un contador de 12
- * bits y azar. El ERD no tiene una columna de secuencia, así que el {@code id} desempata lo que se registró en el mismo
- * instante (los movimientos de una transacción, las líneas de una devolución) en el orden en que se registró.
+ * bits y azar. {@code stock_movements} no tiene una columna de secuencia, así que el {@code id} desempata los movimientos
+ * del mismo instante (los de una transacción) en el orden en que se registraron.
  */
 public final class TimeOrderedId {
 

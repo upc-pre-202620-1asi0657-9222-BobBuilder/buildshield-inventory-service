@@ -21,16 +21,21 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import static pe.buildshield.inventory.infrastructure.persistence.JdbcStockCountRepository.instant;
+import static pe.buildshield.inventory.infrastructure.persistence.JdbcStockCountRepository.timestamp;
+
 /**
- * Devoluciones de saldos ({@code balance_returns} y {@code balance_return_lines}) con SQL directo: cada sentencia
- * filtra por {@code organization_id}. El ERD no tiene versión: la actualización está condicionada por el estado leído,
- * y como cada transición sale de un solo estado, dos operaciones simultáneas no pueden aplicarse ambas. Las líneas solo
- * cambian al verificar lo recibido.
+ * Devoluciones de saldos ({@code balance_returns} y {@code balance_return_lines}) con SQL directo: cada sentencia filtra por {@code organization_id} y la actualización está
+ * condicionada por la versión leída (bloqueo optimista). Las líneas solo cambian al verificar lo recibido.
  */
 @Repository
 class JdbcMaterialReturnRepository implements MaterialReturnRepository {
 
-    private static final String COLUMNS = "id, worksite_id, destination_id, status, created_by, created_at";
+    private static final String COLUMNS = """
+            id, worksite_id, destination_id, status, note, created_by, created_at, requested_by, requested_at,
+            decided_by, decided_at, rejection_reason, dispatched_by, dispatched_at, received_by, received_at,
+            cancelled_by, cancelled_at, version
+            """;
 
     private final JdbcTemplate jdbc;
     private final NamedParameterJdbcTemplate named;
@@ -43,37 +48,50 @@ class JdbcMaterialReturnRepository implements MaterialReturnRepository {
     @Override
     public void add(MaterialReturn materialReturn) {
         jdbc.update("""
-                INSERT INTO balance_returns (id, organization_id, worksite_id, destination_id, status, created_by,
-                                             created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO balance_returns (id, organization_id, worksite_id, destination_id, status, note, created_by,
+                                             created_at, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """, materialReturn.id(), organizationId(), materialReturn.worksiteId(), materialReturn.warehouseId(),
-                materialReturn.status().name(), materialReturn.registeredBy(),
+                materialReturn.status().name(), materialReturn.note(), materialReturn.registeredBy(),
                 Timestamp.from(materialReturn.registeredAt()));
+        List<MaterialReturnLine> lines = materialReturn.lines();
         List<Object[]> batch = new ArrayList<>();
-        for (MaterialReturnLine line : materialReturn.lines()) {
-            batch.add(new Object[]{line.id(), organizationId(), materialReturn.id(), line.materialId(),
-                    line.quantity()});
+        for (int position = 0; position < lines.size(); position++) {
+            MaterialReturnLine line = lines.get(position);
+            batch.add(new Object[]{line.id(), organizationId(), materialReturn.id(), line.materialId(), position,
+                    line.quantity(), line.detail()});
         }
         jdbc.batchUpdate("""
-                INSERT INTO balance_return_lines (id, organization_id, balance_return_id, material_id, declared_qty)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO balance_return_lines (id, organization_id, balance_return_id, material_id, position,
+                                                  declared_qty, detail)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, batch);
     }
 
     @Override
     public boolean update(MaterialReturn materialReturn) {
         int updated = jdbc.update("""
-                UPDATE balance_returns SET status = ?
-                WHERE id = ? AND organization_id = ? AND status = ?
-                """, materialReturn.status().name(), materialReturn.id(), organizationId(),
-                materialReturn.persistedStatus().name());
+                UPDATE balance_returns SET status = ?, requested_by = ?, requested_at = ?, decided_by = ?,
+                    decided_at = ?, rejection_reason = ?, dispatched_by = ?, dispatched_at = ?, received_by = ?,
+                    received_at = ?, cancelled_by = ?, cancelled_at = ?, version = version + 1
+                WHERE id = ? AND organization_id = ? AND version = ?
+                """, materialReturn.status().name(), materialReturn.requestedBy(),
+                timestamp(materialReturn.requestedAt()), materialReturn.decidedBy(),
+                timestamp(materialReturn.decidedAt()), materialReturn.rejectionReason(),
+                materialReturn.dispatchedBy(), timestamp(materialReturn.dispatchedAt()), materialReturn.receivedBy(),
+                timestamp(materialReturn.receivedAt()), materialReturn.cancelledBy(),
+                timestamp(materialReturn.cancelledAt()), materialReturn.id(), organizationId(),
+                materialReturn.version());
         if (updated == 0) {
             return false;
         }
         List<Object[]> batch = materialReturn.lines().stream()
-                .map(line -> new Object[]{line.acceptedQty(), line.id(), organizationId()})
+                .map(line -> new Object[]{line.acceptedQty(), line.rejectionReason(), line.id(), organizationId()})
                 .toList();
-        jdbc.batchUpdate("UPDATE balance_return_lines SET accepted_qty = ? WHERE id = ? AND organization_id = ?", batch);
+        jdbc.batchUpdate("""
+                UPDATE balance_return_lines SET accepted_qty = ?, rejection_reason = ?
+                WHERE id = ? AND organization_id = ?
+                """, batch);
         return true;
     }
 
@@ -116,10 +134,10 @@ class JdbcMaterialReturnRepository implements MaterialReturnRepository {
         }
         Map<UUID, List<MaterialReturnLine>> lines = new LinkedHashMap<>();
         named.query("""
-                        SELECT id, balance_return_id, material_id, declared_qty, accepted_qty
+                        SELECT id, balance_return_id, material_id, declared_qty, detail, accepted_qty, rejection_reason
                         FROM balance_return_lines
                         WHERE organization_id = :organizationId AND balance_return_id IN (:ids)
-                        ORDER BY balance_return_id, id
+                        ORDER BY balance_return_id, position
                         """,
                 new MapSqlParameterSource("organizationId", organizationId())
                         .addValue("ids", rows.stream().map(Row::id).toList()),
@@ -127,25 +145,37 @@ class JdbcMaterialReturnRepository implements MaterialReturnRepository {
                                 ignored -> new ArrayList<>())
                         .add(new MaterialReturnLine(rs.getObject("id", UUID.class),
                                 rs.getObject("material_id", UUID.class), rs.getBigDecimal("declared_qty"),
-                                rs.getBigDecimal("accepted_qty"), null)));
+                                rs.getString("detail"), rs.getBigDecimal("accepted_qty"),
+                                rs.getString("rejection_reason"))));
         return rows.stream().map(row -> row.toDomain(lines.getOrDefault(row.id(), List.of()))).toList();
     }
 
     private static Row row(ResultSet rs) throws SQLException {
         return new Row(rs.getObject("id", UUID.class), rs.getObject("worksite_id", UUID.class),
                 rs.getObject("destination_id", UUID.class), MaterialReturn.Status.valueOf(rs.getString("status")),
-                rs.getObject("created_by", UUID.class), rs.getTimestamp("created_at").toInstant());
+                rs.getString("note"), rs.getObject("created_by", UUID.class), instant(rs, "created_at"),
+                rs.getObject("requested_by", UUID.class), instant(rs, "requested_at"),
+                rs.getObject("decided_by", UUID.class), instant(rs, "decided_at"), rs.getString("rejection_reason"),
+                rs.getObject("dispatched_by", UUID.class), instant(rs, "dispatched_at"),
+                rs.getObject("received_by", UUID.class), instant(rs, "received_at"),
+                rs.getObject("cancelled_by", UUID.class), instant(rs, "cancelled_at"), rs.getLong("version"));
     }
 
     private static UUID organizationId() {
         return TenantContext.require().organizationId();
     }
 
-    private record Row(UUID id, UUID worksiteId, UUID warehouseId, MaterialReturn.Status status, UUID registeredBy,
-            Instant registeredAt) {
+    private record Row(UUID id, UUID worksiteId, UUID warehouseId, MaterialReturn.Status status, String note,
+            UUID registeredBy, Instant registeredAt, UUID requestedBy, Instant requestedAt, UUID decidedBy,
+            Instant decidedAt, String rejectionReason, UUID dispatchedBy, Instant dispatchedAt, UUID receivedBy,
+            Instant receivedAt, UUID cancelledBy, Instant cancelledAt, long version) {
 
         MaterialReturn toDomain(List<MaterialReturnLine> lines) {
-            return new MaterialReturn(id, worksiteId, warehouseId, status, registeredBy, registeredAt, lines);
+            MaterialReturn materialReturn = new MaterialReturn(id, worksiteId, warehouseId, status, note, registeredBy,
+                    registeredAt, lines, version);
+            materialReturn.restore(requestedBy, requestedAt, decidedBy, decidedAt, rejectionReason, dispatchedBy,
+                    dispatchedAt, receivedBy, receivedAt, cancelledBy, cancelledAt);
+            return materialReturn;
         }
     }
 }

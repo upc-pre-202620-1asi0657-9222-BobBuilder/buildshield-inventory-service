@@ -78,7 +78,8 @@ class StockQueryServiceTest {
         commands.reserveForOrder(new OrderApproved(UUID.randomUUID(), callao.id(), List.of(
                 new OrderLine(UUID.randomUUID(), cement.id(), new BigDecimal("10")))));
         dispatch = UUID.randomUUID();
-        commands.deductForDispatch(new DispatchDeparted(dispatch, order, central.id(), List.of(new OrderLine(line, cement.id(), new BigDecimal("15")))));
+        commands.deductForDispatch(new DispatchDeparted(dispatch, order, central.id(), "MAN-1",
+                List.of(new OrderLine(line, cement.id(), new BigDecimal("15")))));
     }
 
     @AfterEach
@@ -147,7 +148,7 @@ class StockQueryServiceTest {
     void movements_list_the_newest_first_within_visible_places() {
         List<MovementView> all = queries.movements(central.id(), cement.id());
         assertThat(all).extracting(MovementView::type).containsExactly("DISPATCH", "RESERVE");
-        assertThat(all.get(0).reference()).isEqualTo(dispatch.toString());
+        assertThat(all.get(0).reference()).isEqualTo("Despacho MAN-1");
         assertThat(all.get(0).locationType()).isEqualTo("WAREHOUSE");
         assertThat(all.get(0).locationName()).isEqualTo("Almacén Central");
         assertThat(all.get(0).sku()).isEqualTo("CEM-001");

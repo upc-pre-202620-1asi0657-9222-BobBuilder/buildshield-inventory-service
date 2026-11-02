@@ -60,7 +60,7 @@ class StockConcurrencyIntegrationTest {
         TestDatabase.reset(jdbc);
         warehouse = UUID.randomUUID();
         cement = UUID.randomUUID();
-        inTransaction(() -> operations.add(warehouse, cement, new BigDecimal("10"), null));
+        inTransaction(() -> operations.add(warehouse, cement, new BigDecimal("10"), "Guía", null));
     }
 
     @RepeatedTest(value = 20, name = "repetición {currentRepetition} de {totalRepetitions}")
@@ -102,9 +102,9 @@ class StockConcurrencyIntegrationTest {
     void consumption_never_exceeds_what_was_reserved_and_release_returns_the_rest() {
         UUID line = UUID.randomUUID();
         inTransaction(() -> operations.reserve(warehouse, cement, new BigDecimal("6"), UUID.randomUUID(), line));
-        inTransaction(() -> operations.consumeReservation(warehouse, cement, new BigDecimal("4"), line, UUID.randomUUID()));
+        inTransaction(() -> operations.consumeReservation(warehouse, cement, new BigDecimal("4"), line, "Despacho 1", UUID.randomUUID()));
         assertThatThrownBy(() -> inTransaction(() ->
-                operations.consumeReservation(warehouse, cement, new BigDecimal("3"), line, UUID.randomUUID())))
+                operations.consumeReservation(warehouse, cement, new BigDecimal("3"), line, "Despacho 2", UUID.randomUUID())))
                 .isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("code", StockOperations.RESERVATION_NOT_AVAILABLE);
 
@@ -113,7 +113,7 @@ class StockConcurrencyIntegrationTest {
 
         TenantContext.runAs(WAREHOUSE_MANAGER, () -> inTransaction(() -> {
             var reservation = operationsReservation(line);
-            return operations.release(reservation).orElseThrow();
+            return operations.release(reservation, "Cierre").orElseThrow();
         }));
 
         assertThat(level("available_qty")).isEqualByComparingTo("6");

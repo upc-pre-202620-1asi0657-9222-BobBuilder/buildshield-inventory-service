@@ -6,7 +6,7 @@ import java.util.UUID;
 /**
  * Saldo de un material en un lugar después de una operación.
  *
- * @param stockItemId ítem afectado; se informa en las entradas y los descuentos directos (nulo en el resto)
+ * @param stockItemId ítem afectado; solo se informa en las entradas (nulo en el resto)
  */
 public record StockLevel(UUID locationId, UUID materialId, BigDecimal availableQty, BigDecimal reservedQty,
         UUID stockItemId) {

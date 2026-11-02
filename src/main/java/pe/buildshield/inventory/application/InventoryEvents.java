@@ -28,6 +28,7 @@ public final class InventoryEvents {
     public static final String DISPATCH = "DISPATCH";
     public static final String RECEPTION = "RECEPTION";
     public static final String STOCK_ITEM = "STOCK_ITEM";
+    public static final String STOCK_COUNT = "STOCK_COUNT";
     public static final String MATERIAL_RETURN = "MATERIAL_RETURN";
 
     /** Origen de lo recibido en obra. */
@@ -88,12 +89,7 @@ public final class InventoryEvents {
             BigDecimal availableAfter, BigDecimal reservedAfter, String note, String entryType) {
     }
 
-    /**
-     * Ajuste del inventario tras un conteo físico (US41): un evento por material con diferencia.
-     *
-     * @param countId    id del ajuste en {@code stock_adjustments}
-     * @param reviewNote siempre nulo: el ERD no guarda una revisión; se mantiene por el contrato del evento
-     */
+    /** Ajuste del inventario validado tras un conteo con diferencias revisadas (US41). */
     public record StockAdjusted(UUID countId, UUID warehouseId, String reason, String reviewNote,
             List<AdjustedLine> lines) {
     }

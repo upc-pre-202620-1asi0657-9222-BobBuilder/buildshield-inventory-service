@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static pe.buildshield.inventory.acceptance.ApiRequest.get;
 import static pe.buildshield.inventory.acceptance.ApiRequest.post;
+import static pe.buildshield.inventory.acceptance.ApiRequest.put;
 import static pe.buildshield.inventory.acceptance.IdentitySteps.EVENT_TIMEOUT;
 
 /**
@@ -31,6 +32,7 @@ import static pe.buildshield.inventory.acceptance.IdentitySteps.EVENT_TIMEOUT;
  */
 public class CountAndReturnSteps {
 
+    private static final String COUNT = "__conteo__";
     private static final String RETURN = "__devolución__";
 
     @Autowired
@@ -65,6 +67,16 @@ public class CountAndReturnSteps {
         List<String> found = new ArrayList<>();
         session.read(response).path("items").forEach(item -> found.add(item.path("type").asText()));
         assertThat(found).containsExactlyElementsOf(Arrays.stream(types.split(",")).map(String::trim).toList());
+    }
+
+    @Entonces("el último movimiento del almacén {string} tiene la referencia {string} y el saldo {string}")
+    public void lastMovement(String warehouse, String reference, String balance) throws Exception {
+        ApiResponse response = session.perform(get("/api/v1/stock/movements/history")
+                .param("locationId", session.id(warehouse).toString()), null, session.accessToken());
+        assertThat(response.status()).isEqualTo(200);
+        JsonNode last = session.read(response).path("items").path(0);
+        assertThat(last.path("reference").asText()).isEqualTo(reference);
+        assertThat(last.path("balanceAfter").decimalValue()).isEqualByComparingTo(balance);
     }
 
     @Entonces("el historial del almacén {string} empieza con el movimiento {string}")
@@ -104,87 +116,61 @@ public class CountAndReturnSteps {
         assertThat(session.body().path("total").asLong()).isEqualTo(total);
     }
 
-    // ---------- US41: conteo físico y ajuste ----------
+    // ---------- US41: conteo de validación y ajuste ----------
 
-    @Cuando("comparo lo contado en el almacén {string}: {string} del material {string} y {string} del material {string}")
-    public void compare(String warehouse, String first, String firstSku, String second, String secondSku)
-            throws Exception {
-        session.send(post("/api/v1/stock/counts/comparison"), countBody(warehouse, first, firstSku, second, secondSku,
-                null));
+    @Cuando("inicio un conteo de validación del almacén {string}")
+    public void startCount(String warehouse) throws Exception {
+        session.send(post("/api/v1/stock/counts"), Map.of("warehouseId", session.id(warehouse).toString(),
+                "note", "Conteo de validación"));
+        if (session.status() == 201) {
+            session.put(COUNT, UUID.fromString(session.body().path("id").asText()));
+        }
     }
 
-    @Cuando("registro lo contado en el almacén {string}: {string} del material {string} y {string} del material {string}")
-    public void registerWithoutReason(String warehouse, String first, String firstSku, String second, String secondSku)
-            throws Exception {
-        session.send(post("/api/v1/stock/counts"), countBody(warehouse, first, firstSku, second, secondSku, null));
+    @Cuando("registro que conté {string} del material {string} y {string} del material {string}")
+    public void registerCounts(String first, String firstSku, String second, String secondSku) throws Exception {
+        session.send(put("/api/v1/stock/counts/" + session.id(COUNT) + "/lines"), Map.of("lines", List.of(
+                Map.of("materialId", session.id(firstSku.toUpperCase()).toString(), "countedQty", new BigDecimal(first)),
+                Map.of("materialId", session.id(secondSku.toUpperCase()).toString(),
+                        "countedQty", new BigDecimal(second)))));
+        session.expectStatus(200);
     }
 
-    @Cuando("ajusto lo contado en el almacén {string}: {string} del material {string} y {string} del material {string} con el motivo {string}")
-    public void adjust(String warehouse, String first, String firstSku, String second, String secondSku, String reason)
-            throws Exception {
-        session.send(post("/api/v1/stock/counts"), countBody(warehouse, first, firstSku, second, secondSku, reason));
+    @Cuando("finalizo el conteo")
+    public void finishCount() throws Exception {
+        session.send(post("/api/v1/stock/counts/" + session.id(COUNT) + "/finish"), null);
+    }
+
+    @Cuando("reviso las diferencias con la nota {string}")
+    public void reviewCount(String note) throws Exception {
+        session.send(post("/api/v1/stock/counts/" + session.id(COUNT) + "/review"), Map.of("note", note));
+        session.expectStatus(200);
+    }
+
+    @Cuando("valido el ajuste con el motivo {string}")
+    public void adjustCount(String reason) throws Exception {
+        session.send(post("/api/v1/stock/counts/" + session.id(COUNT) + "/adjustment"), Map.of("reason", reason));
     }
 
     @Entonces("el conteo queda en estado {string} con {int} diferencias")
     public void countStatus(String status, int differences) throws Exception {
-        assertThat(session.status()).isIn(200, 201);
+        session.expectStatus(200);
         assertThat(session.body().path("status").asText()).isEqualTo(status);
         assertThat(session.body().path("differenceCount").asInt()).isEqualTo(differences);
     }
 
-    @Entonces("el almacén {string} tiene {int} ajustes guardados y el del material {string} dice contado {string}, sistema {string}")
-    public void adjustmentsStored(String warehouse, int total, String sku, String counted, String system)
-            throws Exception {
-        ApiResponse response = session.perform(get("/api/v1/stock/counts")
-                .param("warehouseId", session.id(warehouse).toString()), null, session.accessToken());
-        assertThat(response.status()).isEqualTo(200);
-        JsonNode list = session.read(response);
-        assertThat(list.size()).isEqualTo(total);
-        JsonNode found = null;
-        for (JsonNode item : list) {
-            if (item.path("sku").asText().equals(sku)) {
-                found = item;
+    @Entonces("inventario publicó el ajuste del conteo con la diferencia {string} del material {string}")
+    public void adjustmentPublished(String difference, String sku) {
+        JsonNode payload = awaitOutbox("StockAdjusted", session.id(COUNT));
+        JsonNode line = null;
+        for (JsonNode candidate : payload.path("lines")) {
+            if (candidate.path("materialId").asText().equals(session.id(sku.toUpperCase()).toString())) {
+                line = candidate;
             }
         }
-        assertThat(found).as("ajuste de %s", sku).isNotNull();
-        assertThat(found.path("countedQty").decimalValue()).isEqualByComparingTo(counted);
-        assertThat(found.path("systemQty").decimalValue()).isEqualByComparingTo(system);
-        assertThat(session.read(session.perform(get("/api/v1/stock/counts/" + found.path("id").asText()), null,
-                session.accessToken())).path("sku").asText()).isEqualTo(sku);
-    }
-
-    @Entonces("el almacén {string} no tiene ajustes guardados")
-    public void noAdjustmentsStored(String warehouse) throws Exception {
-        ApiResponse response = session.perform(get("/api/v1/stock/counts")
-                .param("warehouseId", session.id(warehouse).toString()), null, session.accessToken());
-        assertThat(response.status()).isEqualTo(200);
-        assertThat(session.read(response).size()).isZero();
-    }
-
-    @Entonces("inventario publicó el ajuste del conteo con la diferencia {string} del material {string}")
-    public void adjustmentPublished(String difference, String sku) throws Exception {
-        String materialId = session.id(sku.toUpperCase()).toString();
-        String sql = """
-                SELECT (payload -> 'payload')::text FROM outbox_events WHERE event_type = 'StockAdjusted'
-                AND payload -> 'payload' -> 'lines' -> 0 ->> 'materialId' = ? ORDER BY occurred_at DESC LIMIT 1""";
-        await().pollInSameThread().atMost(EVENT_TIMEOUT).until(() -> !jdbc.queryForList(sql, String.class, materialId)
-                .isEmpty());
-        JsonNode payload = json.readTree(jdbc.queryForObject(sql, String.class, materialId));
-        assertThat(payload.at("/lines/0/difference").decimalValue()).isEqualByComparingTo(difference);
+        assertThat(line).as("línea de %s en StockAdjusted", sku).isNotNull();
+        assertThat(line.path("difference").decimalValue()).isEqualByComparingTo(difference);
         assertThat(payload.path("reason").asText()).isNotBlank();
-        assertThat(payload.path("countId").asText()).isNotBlank();
-    }
-
-    private Map<String, Object> countBody(String warehouse, String first, String firstSku, String second,
-            String secondSku, String reason) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("warehouseId", session.id(warehouse).toString());
-        body.put("lines", List.of(
-                Map.of("materialId", session.id(firstSku.toUpperCase()).toString(), "countedQty", new BigDecimal(first)),
-                Map.of("materialId", session.id(secondSku.toUpperCase()).toString(), "countedQty",
-                        new BigDecimal(second))));
-        body.put("reason", reason);
-        return body;
     }
 
     // ---------- US43: saldos de obra y devolución ----------
@@ -255,6 +241,35 @@ public class CountAndReturnSteps {
     public void receiveReturn(String accepted, String sku, String reason) throws Exception {
         returnStep("receive", Map.of("lines", List.of(Map.of("materialId", session.id(sku.toUpperCase()).toString(),
                 "acceptedQty", new BigDecimal(accepted), "rejectionReason", reason))));
+    }
+
+    @Entonces("la devolución muestra la nota {string}, el detalle {string} y el motivo de línea {string}")
+    public void returnTexts(String note, String lineDetail, String reason) throws Exception {
+        JsonNode found = currentReturn();
+        assertThat(found.path("note").asText()).isEqualTo(note);
+        assertThat(found.at("/lines/0/detail").asText()).isEqualTo(lineDetail);
+        assertThat(found.at("/lines/0/rejectionReason").asText()).isEqualTo(reason);
+    }
+
+    @Entonces("la devolución muestra quién y cuándo la solicitó, decidió, retornó y recibió")
+    public void returnSteps() throws Exception {
+        JsonNode found = currentReturn();
+        for (String step : List.of("requested", "decided", "dispatched", "received")) {
+            assertThat(found.path(step + "By").isTextual()).as(step + "By").isTrue();
+            assertThat(found.path(step + "At").isTextual()).as(step + "At").isTrue();
+        }
+    }
+
+    @Entonces("la devolución muestra el motivo de rechazo {string}")
+    public void returnRejectionReason(String reason) throws Exception {
+        assertThat(currentReturn().path("rejectionReason").asText()).isEqualTo(reason);
+    }
+
+    private JsonNode currentReturn() throws Exception {
+        ApiResponse detail = session.perform(get("/api/v1/stock/returns/" + session.id(RETURN)), null,
+                session.accessToken());
+        assertThat(detail.status()).isEqualTo(200);
+        return session.read(detail);
     }
 
     @Entonces("la devolución queda en estado {string} con rechazos")

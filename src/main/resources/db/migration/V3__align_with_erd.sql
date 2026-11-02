@@ -1,36 +1,13 @@
--- Alineación con inventory_db del ERD corregido (wiki/informe-avance2/er-corregido.md, Figura 34.3). Lo que el ERD no
--- puede guardar y se pierde, con la historia de usuario afectada, está en DESVIACIONES.md.
+-- Alineación de inventory_db con el ERD corregido (wiki/informe-avance2/er-corregido.md, Figura 34.3), ampliado por el
+-- equipo para conservar conteos, devoluciones y movimientos: DESVIACIONES.md dice qué se amplió y qué cambió de forma.
+-- Ningún dato de negocio se pierde: lo que cambia de tabla se copia.
 
--- 1. Ajustes por conteo físico (reemplazan a stock_counts y stock_count_lines). Se conservan los conteos cerrados
--- (MATCHED y ADJUSTED): una fila por material contado que tenga existencia. Los abiertos y los anulados no cambiaron
--- el inventario y el ERD no tiene dónde guardarlos.
-CREATE TABLE stock_adjustments (
-    id              UUID PRIMARY KEY,
-    organization_id UUID           NOT NULL,
-    stock_item_id   UUID           NOT NULL,
-    counted_qty     NUMERIC(14, 3) NOT NULL,
-    system_qty      NUMERIC(14, 3) NOT NULL,
-    reason          VARCHAR(200)   NOT NULL,
-    created_by      UUID           NOT NULL,
-    created_at      TIMESTAMPTZ    NOT NULL,
-    CONSTRAINT fk_stock_adjustments_item FOREIGN KEY (stock_item_id) REFERENCES stock_items (id),
-    CONSTRAINT ck_stock_adjustments_quantities CHECK (counted_qty >= 0 AND system_qty >= 0)
-);
-
-CREATE INDEX idx_stock_adjustments_item ON stock_adjustments (organization_id, stock_item_id, created_at DESC);
-
-INSERT INTO stock_adjustments (id, organization_id, stock_item_id, counted_qty, system_qty, reason, created_by, created_at)
-SELECT gen_random_uuid(), c.organization_id, i.id, l.counted_qty, l.system_qty,
-       left(COALESCE(c.adjustment_reason, 'Conteo sin diferencias'), 200),
-       COALESCE(c.adjusted_by, c.finished_by, c.started_by), COALESCE(c.adjusted_at, c.finished_at, c.started_at)
-FROM stock_counts c
-JOIN stock_count_lines l ON l.count_id = c.id AND l.organization_id = c.organization_id
-JOIN stock_items i ON i.organization_id = c.organization_id AND i.location_id = c.warehouse_id
-                  AND i.material_id = l.material_id
-WHERE c.status IN ('MATCHED', 'ADJUSTED') AND l.counted_qty IS NOT NULL AND l.system_qty IS NOT NULL;
-
-DROP TABLE stock_count_lines;
-DROP TABLE stock_counts;
+-- 1. Conteos de validación: stock_counts y stock_count_lines quedan como en V2, con sus datos. Solo la FK de las líneas
+-- pasa a ser de una columna (la compuesta exigía uk_stock_counts_org_id).
+ALTER TABLE stock_count_lines DROP CONSTRAINT fk_stock_count_lines_count;
+ALTER TABLE stock_counts DROP CONSTRAINT uk_stock_counts_org_id;
+ALTER TABLE stock_count_lines ADD CONSTRAINT fk_stock_count_lines_count
+    FOREIGN KEY (count_id) REFERENCES stock_counts (id);
 
 -- 2. Devoluciones de saldos (reemplazan a material_returns y material_return_lines), con los mismos identificadores.
 CREATE TABLE balance_returns (
@@ -40,8 +17,21 @@ CREATE TABLE balance_returns (
     destination_id     UUID        NOT NULL,
     status             VARCHAR(15) NOT NULL,
     return_dispatch_id UUID,
+    note               VARCHAR(500),
     created_by         UUID        NOT NULL,
     created_at         TIMESTAMPTZ NOT NULL,
+    requested_by       UUID,
+    requested_at       TIMESTAMPTZ,
+    decided_by         UUID,
+    decided_at         TIMESTAMPTZ,
+    rejection_reason   VARCHAR(500),
+    dispatched_by      UUID,
+    dispatched_at      TIMESTAMPTZ,
+    received_by        UUID,
+    received_at        TIMESTAMPTZ,
+    cancelled_by       UUID,
+    cancelled_at       TIMESTAMPTZ,
+    version            BIGINT      NOT NULL,
     CONSTRAINT ck_balance_returns_status CHECK (status IN (
         'REGISTERED', 'REQUESTED', 'APPROVED', 'REJECTED', 'IN_TRANSIT', 'RECEIVED', 'CANCELLED'))
 );
@@ -49,31 +39,42 @@ CREATE TABLE balance_returns (
 CREATE INDEX idx_balance_returns_worksite ON balance_returns (organization_id, worksite_id, created_at DESC);
 CREATE INDEX idx_balance_returns_destination ON balance_returns (organization_id, destination_id, created_at DESC);
 
+-- Lo rechazado no se guarda: es lo declarado menos lo aceptado.
 CREATE TABLE balance_return_lines (
     id                UUID PRIMARY KEY,
     organization_id   UUID           NOT NULL,
     balance_return_id UUID           NOT NULL,
     material_id       UUID           NOT NULL,
+    position          INT            NOT NULL,
     declared_qty      NUMERIC(14, 3) NOT NULL,
+    detail            VARCHAR(200),
     accepted_qty      NUMERIC(14, 3),
+    rejection_reason  VARCHAR(200),
+    CONSTRAINT uk_balance_return_lines_material UNIQUE (balance_return_id, material_id),
     CONSTRAINT fk_balance_return_lines_return FOREIGN KEY (balance_return_id) REFERENCES balance_returns (id),
     -- Nunca se acepta más de lo devuelto.
     CONSTRAINT ck_balance_return_lines_quantities CHECK (declared_qty > 0
         AND (accepted_qty IS NULL OR (accepted_qty >= 0 AND accepted_qty <= declared_qty)))
 );
 
-CREATE INDEX idx_balance_return_lines_return ON balance_return_lines (balance_return_id);
+INSERT INTO balance_returns (id, organization_id, worksite_id, destination_id, status, note, created_by, created_at,
+                             requested_by, requested_at, decided_by, decided_at, rejection_reason, dispatched_by,
+                             dispatched_at, received_by, received_at, cancelled_by, cancelled_at, version)
+SELECT id, organization_id, worksite_id, warehouse_id, status, note, registered_by, registered_at,
+       requested_by, requested_at, decided_by, decided_at, rejection_reason, dispatched_by,
+       dispatched_at, received_by, received_at, cancelled_by, cancelled_at, version
+FROM material_returns;
 
-INSERT INTO balance_returns (id, organization_id, worksite_id, destination_id, status, created_by, created_at)
-SELECT id, organization_id, worksite_id, warehouse_id, status, registered_by, registered_at FROM material_returns;
-
-INSERT INTO balance_return_lines (id, organization_id, balance_return_id, material_id, declared_qty, accepted_qty)
-SELECT id, organization_id, return_id, material_id, quantity, accepted_qty FROM material_return_lines;
+INSERT INTO balance_return_lines (id, organization_id, balance_return_id, material_id, position, declared_qty, detail,
+                                  accepted_qty, rejection_reason)
+SELECT id, organization_id, return_id, material_id, position, quantity, detail, accepted_qty, rejection_reason
+FROM material_return_lines;
 
 DROP TABLE material_return_lines;
 DROP TABLE material_returns;
 
--- 3. Movimientos: quién y cuándo se conservan con otro nombre; reference (texto) pasa a source_ref (identificador).
+-- 3. Movimientos: quién y cuándo se conservan con otro nombre; reference (texto) y balance_after se quedan; source_ref
+-- agrega el identificador de lo que originó cada movimiento.
 ALTER TABLE stock_movements RENAME COLUMN occurred_at TO created_at;
 ALTER TABLE stock_movements RENAME COLUMN recorded_by TO created_by;
 ALTER TABLE stock_movements ADD COLUMN source_ref UUID;
@@ -121,13 +122,9 @@ END $$;
 DROP TABLE worksite_supplies;
 
 ALTER TABLE stock_movements DROP CONSTRAINT fk_stock_movements_org_item;
-ALTER TABLE stock_movements DROP CONSTRAINT ck_stock_movements_quantity;
-ALTER TABLE stock_movements DROP COLUMN balance_after;
-ALTER TABLE stock_movements DROP COLUMN reference;
 ALTER TABLE stock_movements DROP COLUMN seq;
 ALTER TABLE stock_movements ADD CONSTRAINT fk_stock_movements_item
     FOREIGN KEY (stock_item_id) REFERENCES stock_items (id);
-ALTER TABLE stock_movements ADD CONSTRAINT ck_stock_movements_quantity CHECK (quantity > 0);
 
 CREATE INDEX idx_stock_movements_item_created ON stock_movements (stock_item_id, created_at, id);
 CREATE INDEX idx_stock_movements_org_created ON stock_movements (organization_id, created_at DESC, id DESC);

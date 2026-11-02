@@ -22,6 +22,7 @@ Característica: Registro del inventario inicial y de las reposiciones con histo
     Entonces la respuesta tiene estado 201
     Y el stock disponible del material "CEM-001" en el almacén "Almacén Central" es "140"
     Y el historial del almacén "Almacén Central" muestra los movimientos "REPLENISHMENT, INITIAL"
+    Y el último movimiento del almacén "Almacén Central" tiene la referencia "Guía 001-2345" y el saldo "140"
     Y inventario publicó la entrada "REPLENISHMENT" del material "CEM-001"
 
   Escenario: El inventario inicial de un material se registra una sola vez

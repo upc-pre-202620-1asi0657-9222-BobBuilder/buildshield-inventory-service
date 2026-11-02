@@ -151,7 +151,7 @@ public class InMemoryStockRepository implements StockRepository {
             StockItem item = items.get(movement.stockItemId());
             if (locationIds.contains(item.locationId()) && (materialId == null || item.materialId().equals(materialId))) {
                 found.add(new RecordedMovement(UUID.randomUUID(), item.locationId(), item.materialId(), movement.type(),
-                        movement.quantity(), item.availableQty(), movement.sourceRef(), movement.createdAt(),
+                        movement.quantity(), movement.balanceAfter(), movement.reference(), movement.createdAt(),
                         UUID.randomUUID()));
             }
         }

@@ -17,8 +17,8 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 import pe.buildshield.inventory.application.MaterialReturnCommandService;
 import pe.buildshield.inventory.application.MaterialReturnQueryService;
 import pe.buildshield.inventory.application.StockCommandService;
-import pe.buildshield.inventory.application.StockAdjustmentCommandService;
-import pe.buildshield.inventory.application.StockAdjustmentQueryService;
+import pe.buildshield.inventory.application.StockCountCommandService;
+import pe.buildshield.inventory.application.StockCountQueryService;
 import pe.buildshield.inventory.application.StockLevel;
 import pe.buildshield.inventory.application.StockQueryService;
 import pe.buildshield.inventory.shared.security.JwtTokenIssuer;
@@ -36,6 +36,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -51,8 +52,9 @@ class RoleAuthorizationTest {
     private static final Map<String, String> BODIES = Map.of(
             "entry", "{\"warehouseId\":\"00000000-0000-0000-0000-0000000000aa\","
                     + "\"materialId\":\"00000000-0000-0000-0000-0000000000bb\",\"quantity\":10}",
-            "count", "{\"warehouseId\":\"00000000-0000-0000-0000-0000000000aa\",\"lines\":[{\"materialId\":"
-                    + "\"00000000-0000-0000-0000-0000000000bb\",\"countedQty\":5}],\"reason\":\"Rotura\"}",
+            "count", "{\"warehouseId\":\"00000000-0000-0000-0000-0000000000aa\"}",
+            "lines", "{\"lines\":[{\"materialId\":\"00000000-0000-0000-0000-0000000000bb\",\"countedQty\":5}]}",
+            "note", "{\"note\":\"Recontado\"}",
             "reason", "{\"reason\":\"Rotura\"}",
             "return", "{\"worksiteId\":\"00000000-0000-0000-0000-0000000000dd\",\"lines\":[{\"materialId\":"
                     + "\"00000000-0000-0000-0000-0000000000bb\",\"quantity\":2}]}",
@@ -78,10 +80,10 @@ class RoleAuthorizationTest {
     StockQueryService queries;
 
     @MockitoBean
-    StockAdjustmentCommandService countCommands;
+    StockCountCommandService countCommands;
 
     @MockitoBean
-    StockAdjustmentQueryService countQueries;
+    StockCountQueryService countQueries;
 
     @MockitoBean
     MaterialReturnCommandService returnCommands;
@@ -127,20 +129,28 @@ class RoleAuthorizationTest {
             "GET  , /api/v1/stock/movements/history, , ADMINISTRATOR, 200",
             "GET  , /api/v1/stock/movements/history, , WAREHOUSE_MANAGER, 200",
             "GET  , /api/v1/stock/movements/history, , SITE_MANAGER, 200",
-            // Conteos físicos (US41): administrador y encargado de almacén
+            // Conteos de validación (US41): administrador y encargado de almacén
             "POST , /api/v1/stock/counts, count, ANONYMOUS, 401",
             "POST , /api/v1/stock/counts, count, ADMINISTRATOR, 201",
             "POST , /api/v1/stock/counts, count, WAREHOUSE_MANAGER, 201",
             "POST , /api/v1/stock/counts, count, SITE_MANAGER, 403",
-            "POST , /api/v1/stock/counts/comparison, count, ANONYMOUS, 401",
-            "POST , /api/v1/stock/counts/comparison, count, ADMINISTRATOR, 200",
-            "POST , /api/v1/stock/counts/comparison, count, WAREHOUSE_MANAGER, 200",
-            "POST , /api/v1/stock/counts/comparison, count, SITE_MANAGER, 403",
             "GET  , /api/v1/stock/counts, , ANONYMOUS, 401",
             "GET  , /api/v1/stock/counts, , WAREHOUSE_MANAGER, 200",
             "GET  , /api/v1/stock/counts, , SITE_MANAGER, 403",
             "GET  , /api/v1/stock/counts/{id}, , ADMINISTRATOR, 200",
             "GET  , /api/v1/stock/counts/{id}, , SITE_MANAGER, 403",
+            "PUT  , /api/v1/stock/counts/{id}/lines, lines, WAREHOUSE_MANAGER, 200",
+            "PUT  , /api/v1/stock/counts/{id}/lines, lines, SITE_MANAGER, 403",
+            "POST , /api/v1/stock/counts/{id}/finish, , ADMINISTRATOR, 200",
+            "POST , /api/v1/stock/counts/{id}/finish, , SITE_MANAGER, 403",
+            "POST , /api/v1/stock/counts/{id}/review, note, WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/counts/{id}/review, note, SITE_MANAGER, 403",
+            "POST , /api/v1/stock/counts/{id}/adjustment, reason, ADMINISTRATOR, 200",
+            "POST , /api/v1/stock/counts/{id}/adjustment, reason, WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/counts/{id}/adjustment, reason, SITE_MANAGER, 403",
+            "POST , /api/v1/stock/counts/{id}/adjustment, reason, ANONYMOUS, 401",
+            "POST , /api/v1/stock/counts/{id}/cancel, , WAREHOUSE_MANAGER, 200",
+            "POST , /api/v1/stock/counts/{id}/cancel, , SITE_MANAGER, 403",
             // Saldo y devoluciones (US43): lado de la obra y lado del almacén
             "GET  , /api/v1/stock/worksites/{id}/balance, , ANONYMOUS, 401",
             "GET  , /api/v1/stock/worksites/{id}/balance, , ADMINISTRATOR, 200",
@@ -178,6 +188,7 @@ class RoleAuthorizationTest {
         String uri = path.replace("{id}", ID);
         MockHttpServletRequestBuilder request = switch (method) {
             case "GET" -> get(uri);
+            case "PUT" -> put(uri);
             default -> post(uri);
         };
         if (body != null) {

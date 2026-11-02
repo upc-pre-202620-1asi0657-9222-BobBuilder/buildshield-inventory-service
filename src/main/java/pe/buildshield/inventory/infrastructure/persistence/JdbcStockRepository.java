@@ -69,25 +69,15 @@ class JdbcStockRepository implements StockRepository {
             StockMovement.Type.valueOf(rs.getString("type")),
             rs.getBigDecimal("quantity"),
             rs.getBigDecimal("balance_after"),
-            rs.getObject("source_ref", UUID.class),
+            rs.getString("reference"),
             rs.getTimestamp("created_at").toInstant(),
             rs.getObject("created_by", UUID.class));
 
-    /**
-     * Movimientos con el disponible que dejó cada uno: la suma acumulada por ítem, en el orden en que se registraron.
-     * El ERD no guarda ese saldo. DISPATCH sale de lo reservado y no cambia lo disponible.
-     */
     private static final String MOVEMENTS = """
-            SELECT * FROM (
-                SELECT m.id, i.location_id, i.material_id, m.type, m.quantity, m.source_ref, m.created_at, m.created_by,
-                       SUM(CASE WHEN m.type IN ('ENTRY', 'RELEASE', 'INITIAL', 'REPLENISHMENT', 'ADJUSTMENT_IN',
-                                                'RETURN_IN') THEN m.quantity
-                                WHEN m.type = 'DISPATCH' THEN 0
-                                ELSE -m.quantity END)
-                           OVER (PARTITION BY m.stock_item_id ORDER BY m.created_at, m.id) AS balance_after
-                FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id
-                WHERE m.organization_id = :organizationId AND i.location_id IN (:locations)
-            ) m
+            SELECT m.id, i.location_id, i.material_id, m.type, m.quantity, m.balance_after, m.reference, m.created_at,
+                   m.created_by
+            FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id
+            WHERE m.organization_id = :organizationId AND i.location_id IN (:locations)
             """;
 
     private final JdbcTemplate jdbc;
@@ -194,12 +184,13 @@ class JdbcStockRepository implements StockRepository {
     public void record(StockMovement movement) {
         TenantInfo tenant = TenantContext.require();
         jdbc.update("""
-                        INSERT INTO stock_movements (id, organization_id, stock_item_id, type, quantity, source_ref,
-                                                     created_by, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO stock_movements (id, organization_id, stock_item_id, type, quantity, balance_after,
+                                                     reference, source_ref, created_by, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                 TimeOrderedId.next(), tenant.organizationId(), movement.stockItemId(), movement.type().name(),
-                movement.quantity(), movement.sourceRef(), tenant.userId(), Timestamp.from(movement.createdAt()));
+                movement.quantity(), movement.balanceAfter(), movement.reference(), movement.sourceRef(), tenant.userId(),
+                Timestamp.from(movement.createdAt()));
     }
 
     @Override
@@ -212,7 +203,7 @@ class JdbcStockRepository implements StockRepository {
                 .addValue("locations", locationIds)
                 .addValue("materialId", materialId)
                 .addValue("limit", limit);
-        return named.query(MOVEMENTS + (materialId == null ? "" : " WHERE m.material_id = :materialId ") + """
+        return named.query(MOVEMENTS + (materialId == null ? "" : " AND i.material_id = :materialId ") + """
                 ORDER BY m.created_at DESC, m.id DESC
                 LIMIT :limit
                 """, params, MOVEMENT);
@@ -228,9 +219,9 @@ class JdbcStockRepository implements StockRepository {
                 .addValue("locations", locationIds)
                 .addValue("limit", size)
                 .addValue("offset", (long) page * size);
-        StringBuilder where = new StringBuilder(" WHERE true");
+        StringBuilder where = new StringBuilder();
         if (filter.materialId() != null) {
-            where.append(" AND m.material_id = :materialId");
+            where.append(" AND i.material_id = :materialId");
             params.addValue("materialId", filter.materialId());
         }
         if (filter.type() != null) {

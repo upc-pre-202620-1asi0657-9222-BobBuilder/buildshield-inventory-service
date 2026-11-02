@@ -108,12 +108,11 @@ public class StockCommandService {
             throw new ConflictException("INITIAL_STOCK_ALREADY_REGISTERED",
                     "El material ya tiene inventario inicial en el almacén; registra una reposición");
         }
-        // La guía u observación no tiene columna en el ERD: solo viaja en el evento.
-        String trimmedNote = note == null || note.isBlank() ? null : note.trim();
-        StockLevel level = operations.add(warehouseId, materialId, quantity, type.movementType(), null);
+        String reference = note == null || note.isBlank() ? null : note.trim();
+        StockLevel level = operations.add(warehouseId, materialId, quantity, type.movementType(), reference, null);
         outbox.append(InventoryEvents.STOCK_ENTRY_REGISTERED, InventoryEvents.STOCK_ITEM, level.stockItemId(),
                 new InventoryEvents.StockEntryRegistered(warehouseId, materialId, new Quantity(quantity).value(),
-                        level.availableQty(), level.reservedQty(), trimmedNote, type.name()));
+                        level.availableQty(), level.reservedQty(), reference, type.name()));
         return level;
     }
 
@@ -168,19 +167,21 @@ public class StockCommandService {
      */
     @Transactional
     public void deductForDispatch(DispatchDeparted dispatch) {
+        String reference = "Despacho " + (dispatch.manifestCode() == null ? dispatch.dispatchId() : dispatch.manifestCode());
         List<DeductedLine> lines = new ArrayList<>();
         for (OrderLine line : dispatch.lines()) {
             StockLevel level;
             try {
                 level = operations.consumeReservation(dispatch.warehouseId(), line.materialId(), line.quantity(),
-                        line.orderLineId(), dispatch.dispatchId());
+                        line.orderLineId(), reference, dispatch.dispatchId());
             } catch (ConflictException ex) {
                 if (!StockOperations.RESERVATION_NOT_AVAILABLE.equals(ex.getCode())) {
                     throw ex;
                 }
                 log.warn("La línea {} del despacho {} no tenía reserva suficiente: se descuenta de lo disponible",
-                        line.orderLineId(), dispatch.dispatchId());
-                level = operations.deduct(dispatch.warehouseId(), line.materialId(), line.quantity(), dispatch.dispatchId());
+                        line.orderLineId(), reference, dispatch.dispatchId());
+                level = operations.deduct(dispatch.warehouseId(), line.materialId(), line.quantity(), reference,
+                        dispatch.dispatchId());
             }
             lines.add(new DeductedLine(line.orderLineId(), line.materialId(), new Quantity(line.quantity()).value(),
                     level.availableQty(), level.reservedQty()));
@@ -201,7 +202,7 @@ public class StockCommandService {
                 continue;
             }
             StockLevel level = operations.add(reception.worksiteId(), line.materialId(), line.deltaQuantity(),
-                    reception.dispatchId());
+                    "Recepción " + reception.receptionId(), reception.dispatchId());
             lines.add(new ReceivedLine(line.materialId(), new Quantity(line.deltaQuantity()).value(),
                     level.availableQty()));
         }
@@ -220,7 +221,7 @@ public class StockCommandService {
         List<ReleasedLine> released = new ArrayList<>();
         UUID warehouseId = null;
         for (StockReservation reservation : stock.findReservationsByOrder(order.orderId())) {
-            Optional<StockLevel> level = operations.release(reservation);
+            Optional<StockLevel> level = operations.release(reservation, "Liberación del pedido " + order.orderId());
             if (level.isPresent()) {
                 warehouseId = reservation.locationId();
                 released.add(new ReleasedLine(reservation.orderLineId(), reservation.materialId(),

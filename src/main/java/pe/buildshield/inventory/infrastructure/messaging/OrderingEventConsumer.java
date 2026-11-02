@@ -16,6 +16,7 @@ import java.util.List;
 
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.decimal;
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.list;
+import static pe.buildshield.inventory.infrastructure.messaging.Payloads.text;
 import static pe.buildshield.inventory.infrastructure.messaging.Payloads.uuid;
 
 /**
@@ -68,7 +69,7 @@ public class OrderingEventConsumer {
                     uuid(payload, "warehouseId"), orderLines(payload)));
             case DISPATCH_DEPARTED -> stock.deductForDispatch(new OrderingSignals.DispatchDeparted(
                     uuid(payload, "dispatchId"), uuid(payload, "orderId"), uuid(payload, "warehouseId"),
-                    orderLines(payload)));
+                    text(payload, "manifestCode"), orderLines(payload)));
             case RECEPTION_PARTIALLY_RECEIVED -> stock.receiveAtWorksite(reception(payload,
                     InventoryEvents.SOURCE_PARTIAL));
             case RECEPTION_CONFIRMED -> stock.receiveAtWorksite(reception(payload,
