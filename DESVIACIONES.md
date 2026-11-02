@@ -4,7 +4,6 @@ Base del esquema: sección `inventory_db` de `wiki/informe-avance2/er-corregido.
 
 ## Ampliación frente al catálogo de `er-corregido.md`
 
-Ese catálogo todavía no tiene esta ampliación y debe actualizarse.
 
 - `stock_adjustments` no existe. En su lugar están `stock_counts` y `stock_count_lines`, como en V2, con la FK simple `stock_count_lines.count_id -> stock_counts(id)`.
 - `balance_returns` agrega `note`, `requested_by`, `requested_at`, `decided_by`, `decided_at`, `rejection_reason`, `dispatched_by`, `dispatched_at`, `received_by`, `received_at`, `cancelled_by`, `cancelled_at` y `version`.
