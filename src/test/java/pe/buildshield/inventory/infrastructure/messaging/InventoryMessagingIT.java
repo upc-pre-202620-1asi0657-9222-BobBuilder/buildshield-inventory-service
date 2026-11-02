@@ -16,6 +16,7 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
 import pe.buildshield.inventory.application.StockCommandService;
+import pe.buildshield.inventory.domain.model.MaterialReturnRepository;
 import pe.buildshield.inventory.shared.messaging.Topics;
 import pe.buildshield.inventory.shared.tenant.TenantContext;
 import pe.buildshield.inventory.shared.tenant.TenantInfo;
@@ -53,6 +54,9 @@ class InventoryMessagingIT {
 
     @Autowired
     StockCommandService commands;
+
+    @Autowired
+    MaterialReturnRepository returns;
 
     @Autowired
     JdbcTemplate jdbc;
@@ -232,6 +236,89 @@ class InventoryMessagingIT {
         assertThat(count("SELECT count(*) FROM stock_reservations WHERE organization_id = ?")).isEqualTo(1);
         assertThat(count("SELECT count(*) FROM outbox_events WHERE organization_id = ? AND event_type = 'StockReserved'"))
                 .isEqualTo(1);
+    }
+
+    @Test
+    void the_return_dispatch_is_stored_once_and_does_not_change_the_return_or_the_stock() throws Exception {
+        UUID returnId = insertReturn("IN_TRANSIT");
+        UUID dispatchId = UUID.randomUUID();
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("returnId", returnId);
+        payload.put("dispatchId", dispatchId);
+        payload.put("lines", List.of());
+
+        publishOrdering("ReturnDispatchCreated", "DISPATCH", dispatchId, payload);
+        await().atMost(TIMEOUT).until(() -> dispatchId.equals(jdbc.queryForObject(
+                "SELECT return_dispatch_id FROM balance_returns WHERE id = ?", UUID.class, returnId)));
+        assertThat(jdbc.queryForMap("SELECT status, version FROM balance_returns WHERE id = ?", returnId))
+                .containsEntry("status", "IN_TRANSIT").containsEntry("version", 0L);
+        assertThat(TenantContext.callAs(new TenantInfo(organization, UUID.randomUUID(), "ADMINISTRATOR"),
+                () -> returns.find(returnId)).orElseThrow().returnDispatchId()).isEqualTo(dispatchId);
+
+        // Otro despacho para la misma devolución o una devolución desconocida no cambian nada ni detienen el consumo.
+        Map<String, Object> other = new java.util.LinkedHashMap<>(payload);
+        other.put("dispatchId", UUID.randomUUID());
+        publishOrdering("ReturnDispatchCreated", "DISPATCH", UUID.randomUUID(), other);
+        Map<String, Object> unknown = new java.util.LinkedHashMap<>(payload);
+        unknown.put("returnId", UUID.randomUUID());
+        UUID marker = UUID.randomUUID();
+        publishOrdering("ReturnDispatchCreated", "DISPATCH", UUID.randomUUID(), unknown);
+        kafka.send(Topics.ORDERING, marker.toString(), TestEvents.envelope(json, marker, "ReturnDispatchClosed",
+                organization, "DISPATCH", marker, Map.of("returnId", returnId, "dispatchId", dispatchId))).get();
+        await().atMost(TIMEOUT).until(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM processed_events WHERE event_id = ?", Long.class, marker) == 1);
+        assertThat(jdbc.queryForObject("SELECT return_dispatch_id FROM balance_returns WHERE id = ?", UUID.class,
+                returnId)).isEqualTo(dispatchId);
+        assertThat(count("SELECT count(*) FROM stock_movements WHERE organization_id = ? AND type LIKE 'RETURN%'"))
+                .isZero();
+    }
+
+    @Test
+    void stock_events_of_a_return_dispatch_do_not_move_stock() throws Exception {
+        BigDecimal warehouseBefore = level(warehouse, cement, "available_qty");
+        long movementsBefore = count("SELECT count(*) FROM stock_movements WHERE organization_id = ?");
+        UUID dispatch = UUID.randomUUID();
+        UUID line = UUID.randomUUID();
+
+        Map<String, Object> flagged = new java.util.LinkedHashMap<>(TestEvents.dispatchDeparted(dispatch,
+                UUID.randomUUID(), warehouse, worksite, List.of(TestEvents.orderLine(line, cement, "5"))));
+        flagged.put("returnDispatch", true);
+        publishOrdering("DispatchDeparted", "DISPATCH", dispatch, flagged);
+        Map<String, Object> withoutOrder = new java.util.LinkedHashMap<>(TestEvents.dispatchDeparted(dispatch,
+                UUID.randomUUID(), warehouse, worksite, List.of(TestEvents.orderLine(line, cement, "5"))));
+        withoutOrder.put("orderId", null);
+        publishOrdering("DispatchDeparted", "DISPATCH", dispatch, withoutOrder);
+        for (String type : List.of("ReceptionPartiallyReceived", "ReceptionConfirmed")) {
+            Map<String, Object> reception = new java.util.LinkedHashMap<>(TestEvents.reception(UUID.randomUUID(),
+                    dispatch, worksite, List.of(TestEvents.receivedLine(cement, "5"))));
+            reception.put("returnDispatch", true);
+            publishOrdering(type, "RECEPTION", dispatch, reception);
+        }
+        UUID marker = UUID.randomUUID();
+        kafka.send(Topics.ORDERING, dispatch.toString(), TestEvents.envelope(json, marker, "ReturnDispatchClosed",
+                organization, "DISPATCH", dispatch, Map.of())).get();
+        await().atMost(TIMEOUT).until(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM processed_events WHERE event_id = ?", Long.class, marker) == 1);
+
+        assertThat(level(warehouse, cement, "available_qty")).isEqualByComparingTo(warehouseBefore);
+        assertThat(level(worksite, cement, "available_qty")).isEqualByComparingTo("0");
+        assertThat(count("SELECT count(*) FROM stock_movements WHERE organization_id = ?")).isEqualTo(movementsBefore);
+        assertThat(count("SELECT count(*) FROM outbox_events WHERE organization_id = ? "
+                + "AND event_type IN ('StockDeducted', 'StockReceived')")).isZero();
+    }
+
+    private UUID insertReturn(String status) {
+        UUID returnId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO balance_returns (id, organization_id, worksite_id, destination_id, status, created_by,
+                    created_at, version)
+                VALUES (?, ?, ?, ?, ?, ?, now(), 0)""", returnId, organization, worksite, warehouse, status,
+                UUID.randomUUID());
+        jdbc.update("""
+                INSERT INTO balance_return_lines (id, organization_id, balance_return_id, material_id, position,
+                    declared_qty)
+                VALUES (?, ?, ?, ?, 0, 5)""", UUID.randomUUID(), organization, returnId, cement);
+        return returnId;
     }
 
     private void publishOrganization(String envelope) {

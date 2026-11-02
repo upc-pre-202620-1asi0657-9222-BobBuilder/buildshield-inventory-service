@@ -34,7 +34,7 @@ class JdbcMaterialReturnRepository implements MaterialReturnRepository {
     private static final String COLUMNS = """
             id, worksite_id, destination_id, status, note, created_by, created_at, requested_by, requested_at,
             decided_by, decided_at, rejection_reason, dispatched_by, dispatched_at, received_by, received_at,
-            cancelled_by, cancelled_at, version
+            cancelled_by, cancelled_at, return_dispatch_id, version
             """;
 
     private final JdbcTemplate jdbc;
@@ -93,6 +93,14 @@ class JdbcMaterialReturnRepository implements MaterialReturnRepository {
                 WHERE id = ? AND organization_id = ?
                 """, batch);
         return true;
+    }
+
+    @Override
+    public boolean linkReturnDispatch(UUID returnId, UUID dispatchId) {
+        return jdbc.update("""
+                UPDATE balance_returns SET return_dispatch_id = ?
+                WHERE id = ? AND organization_id = ? AND return_dispatch_id IS NULL
+                """, dispatchId, returnId, organizationId()) == 1;
     }
 
     @Override
@@ -158,7 +166,8 @@ class JdbcMaterialReturnRepository implements MaterialReturnRepository {
                 rs.getObject("decided_by", UUID.class), instant(rs, "decided_at"), rs.getString("rejection_reason"),
                 rs.getObject("dispatched_by", UUID.class), instant(rs, "dispatched_at"),
                 rs.getObject("received_by", UUID.class), instant(rs, "received_at"),
-                rs.getObject("cancelled_by", UUID.class), instant(rs, "cancelled_at"), rs.getLong("version"));
+                rs.getObject("cancelled_by", UUID.class), instant(rs, "cancelled_at"),
+                rs.getObject("return_dispatch_id", UUID.class), rs.getLong("version"));
     }
 
     private static UUID organizationId() {
@@ -168,13 +177,14 @@ class JdbcMaterialReturnRepository implements MaterialReturnRepository {
     private record Row(UUID id, UUID worksiteId, UUID warehouseId, MaterialReturn.Status status, String note,
             UUID registeredBy, Instant registeredAt, UUID requestedBy, Instant requestedAt, UUID decidedBy,
             Instant decidedAt, String rejectionReason, UUID dispatchedBy, Instant dispatchedAt, UUID receivedBy,
-            Instant receivedAt, UUID cancelledBy, Instant cancelledAt, long version) {
+            Instant receivedAt, UUID cancelledBy, Instant cancelledAt, UUID returnDispatchId, long version) {
 
         MaterialReturn toDomain(List<MaterialReturnLine> lines) {
             MaterialReturn materialReturn = new MaterialReturn(id, worksiteId, warehouseId, status, note, registeredBy,
                     registeredAt, lines, version);
             materialReturn.restore(requestedBy, requestedAt, decidedBy, decidedAt, rejectionReason, dispatchedBy,
                     dispatchedAt, receivedBy, receivedAt, cancelledBy, cancelledAt);
+            materialReturn.restoreReturnDispatch(returnDispatchId);
             return materialReturn;
         }
     }

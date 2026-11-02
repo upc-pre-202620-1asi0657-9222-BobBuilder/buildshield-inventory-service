@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import pe.buildshield.inventory.application.InventoryEvents;
+import pe.buildshield.inventory.application.MaterialReturnCommandService;
 import pe.buildshield.inventory.application.OrderingSignals;
 import pe.buildshield.inventory.application.StockCommandService;
 import pe.buildshield.inventory.shared.messaging.EventEnvelope;
@@ -29,7 +30,13 @@ import static pe.buildshield.inventory.infrastructure.messaging.Payloads.uuid;
  *   <li>{@code ReceptionPartiallyReceived} y {@code ReceptionConfirmed}: suma a la obra solo el
  *       {@code deltaQuantity} ({@code StockReceived}).</li>
  *   <li>{@code OrderRejected} y {@code OrderClosed}: libera lo reservado sin consumir ({@code StockReleased}).</li>
+ *   <li>{@code ReturnDispatchCreated}: guarda el despacho de retorno en la devolución de saldos.</li>
  * </ul>
+ *
+ * Un despacho de retorno no mueve stock por estos eventos: el de una devolución lo mueve solo
+ * {@code MaterialReturnCommandService}. Por eso {@code DispatchDeparted} y las recepciones marcados con
+ * {@code returnDispatch} se ignoran, igual que un {@code DispatchDeparted} sin pedido.
+ *
  *
  * Cada evento se procesa una sola vez ({@link IdempotentEventProcessor}) y en una transacción con su efecto y
  * el evento de respuesta (outbox). Los demás tipos se ignoran.
@@ -43,6 +50,7 @@ public class OrderingEventConsumer {
     static final String DISPATCH_DEPARTED = "DispatchDeparted";
     static final String RECEPTION_PARTIALLY_RECEIVED = "ReceptionPartiallyReceived";
     static final String RECEPTION_CONFIRMED = "ReceptionConfirmed";
+    static final String RETURN_DISPATCH_CREATED = "ReturnDispatchCreated";
 
     /** Nombre en la llave de {@code processed_events}. */
     static final String CONSUMER = "OrderingEventConsumer";
@@ -51,10 +59,13 @@ public class OrderingEventConsumer {
 
     private final IdempotentEventProcessor processor;
     private final StockCommandService stock;
+    private final MaterialReturnCommandService returns;
 
-    public OrderingEventConsumer(IdempotentEventProcessor processor, StockCommandService stock) {
+    public OrderingEventConsumer(IdempotentEventProcessor processor, StockCommandService stock,
+            MaterialReturnCommandService returns) {
         this.processor = processor;
         this.stock = stock;
+        this.returns = returns;
     }
 
     @KafkaListener(topics = "${buildshield.messaging.consumes.ordering:buildshield.ordering}")
@@ -64,6 +75,10 @@ public class OrderingEventConsumer {
 
     void handle(EventEnvelope event) {
         JsonNode payload = event.payload();
+        if (isReturnDispatchStockEvent(event.eventType(), payload)) {
+            log.debug("Evento {} de un despacho de retorno ignorado: no mueve stock", event.eventType());
+            return;
+        }
         switch (event.eventType()) {
             case ORDER_APPROVED -> stock.reserveForOrder(new OrderingSignals.OrderApproved(uuid(payload, "orderId"),
                     uuid(payload, "warehouseId"), orderLines(payload)));
@@ -78,8 +93,18 @@ public class OrderingEventConsumer {
                     InventoryEvents.RELEASE_ORDER_REJECTED));
             case ORDER_CLOSED -> stock.releaseForOrder(new OrderingSignals.OrderEnded(uuid(payload, "orderId"),
                     InventoryEvents.RELEASE_ORDER_CLOSED));
+            case RETURN_DISPATCH_CREATED -> returns.linkReturnDispatch(uuid(payload, "returnId"),
+                    uuid(payload, "dispatchId"));
             default -> log.debug("Evento {} ignorado por inventory", event.eventType());
         }
+    }
+
+    private static boolean isReturnDispatchStockEvent(String eventType, JsonNode payload) {
+        return switch (eventType) {
+            case DISPATCH_DEPARTED -> payload.path("returnDispatch").asBoolean(false) || !payload.hasNonNull("orderId");
+            case RECEPTION_PARTIALLY_RECEIVED, RECEPTION_CONFIRMED -> payload.path("returnDispatch").asBoolean(false);
+            default -> false;
+        };
     }
 
     private static List<OrderingSignals.OrderLine> orderLines(JsonNode payload) {

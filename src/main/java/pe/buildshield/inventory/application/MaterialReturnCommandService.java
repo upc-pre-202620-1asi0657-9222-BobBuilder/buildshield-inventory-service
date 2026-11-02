@@ -1,5 +1,7 @@
 package pe.buildshield.inventory.application;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pe.buildshield.inventory.application.InventoryEvents.ReturnedLine;
@@ -49,6 +51,8 @@ import java.util.UUID;
  */
 @Service
 public class MaterialReturnCommandService {
+
+    private static final Logger log = LoggerFactory.getLogger(MaterialReturnCommandService.class);
 
     static final String ADMINISTRATOR = "ADMINISTRATOR";
     static final String WAREHOUSE_MANAGER = "WAREHOUSE_MANAGER";
@@ -180,6 +184,18 @@ public class MaterialReturnCommandService {
         requireWorksiteSide(materialReturn);
         materialReturn.cancel(TenantContext.require().userId(), clock.instant());
         return saveAndPublish(materialReturn, InventoryEvents.MATERIAL_RETURN_CANCELLED);
+    }
+
+    /**
+     * {@code ReturnDispatchCreated}: ordering creó el despacho de retorno y la devolución guarda su id. No mueve stock:
+     * el material ya salió de la obra al iniciar el retorno y entra al almacén al verificarlo.
+     */
+    @Transactional
+    public void linkReturnDispatch(UUID returnId, UUID dispatchId) {
+        if (!returns.linkReturnDispatch(returnId, dispatchId)) {
+            log.info("Despacho de retorno {} ignorado: la devolución {} no existe o ya tiene despacho", dispatchId,
+                    returnId);
+        }
     }
 
     private MaterialReturn saveAndPublish(MaterialReturn materialReturn, String eventType) {

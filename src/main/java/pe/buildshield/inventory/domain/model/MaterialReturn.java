@@ -31,6 +31,8 @@ import java.util.UUID;
  *   <li>El almacén de origen la aprueba o la rechaza con un motivo; el rechazo deja el saldo en la obra.</li>
  *   <li>Al iniciar el retorno el material sale de la obra; al verificarlo, el almacén reincorpora solo lo aceptado
  *       y registra lo rechazado de cada línea con su motivo.</li>
+ *   <li>Cuando ordering crea el despacho de retorno, la devolución guarda su id ({@code return_dispatch_id}). Es solo
+ *       una referencia: no cambia el estado ni el stock.</li>
  * </ul>
  */
 public class MaterialReturn {
@@ -63,6 +65,7 @@ public class MaterialReturn {
     private Instant receivedAt;
     private UUID cancelledBy;
     private Instant cancelledAt;
+    private UUID returnDispatchId;
 
     /** Lo que declara la obra por material al registrar el saldo. */
     public record DeclaredLine(UUID materialId, BigDecimal quantity, String detail) {
@@ -221,6 +224,11 @@ public class MaterialReturn {
         this.cancelledAt = cancelledAt;
     }
 
+    /** Reconstrucción del despacho de retorno que creó ordering. */
+    public void restoreReturnDispatch(UUID dispatchId) {
+        this.returnDispatchId = dispatchId;
+    }
+
     private static BigDecimal accepted(BigDecimal value, MaterialReturnLine line) {
         if (value == null || value.signum() < 0 || value.compareTo(line.quantity()) > 0
                 || value.stripTrailingZeros().scale() > Quantity.SCALE) {
@@ -320,5 +328,9 @@ public class MaterialReturn {
 
     public Instant cancelledAt() {
         return cancelledAt;
+    }
+
+    public UUID returnDispatchId() {
+        return returnDispatchId;
     }
 }

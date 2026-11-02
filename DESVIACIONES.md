@@ -22,7 +22,7 @@ Ese catálogo todavía no tiene esta ampliación y debe actualizarse.
 - **`stock_movements.seq`**: desaparece. El `id` de los movimientos nuevos es un UUID versión 7 creciente, que desempata los del mismo instante. Entre filas anteriores a V3 con la misma hora el orden no está garantizado.
 - **`occurredAt` y `recordedBy`** conservan su nombre en la API y salen de `created_at` y `created_by`. **`registeredBy` y `registeredAt`** salen igual de `created_by` y `created_at`, y **`warehouseId`** de la devolución, de `destination_id`.
 - **`rejectedQty`** no se guarda: es lo declarado menos lo aceptado, y la API lo sigue devolviendo.
-- **`return_dispatch_id`** existe en `balance_returns` y queda nulo por ahora: el retorno sigue siendo un paso local de inventory, no crea un despacho en ordering.
+- **`return_dispatch_id`** se llena al consumir `ReturnDispatchCreated` de ordering. Queda nulo en las devoluciones que todavía no iniciaron el retorno y en las que salieron antes de este cambio. El retorno y su stock siguen siendo de inventory: guardar el id no cambia la versión ni el estado.
 
 ## Aclaraciones de la API
 

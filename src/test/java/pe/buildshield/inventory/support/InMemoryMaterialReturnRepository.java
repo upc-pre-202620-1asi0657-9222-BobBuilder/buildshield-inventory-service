@@ -39,6 +39,16 @@ public class InMemoryMaterialReturnRepository implements MaterialReturnRepositor
     }
 
     @Override
+    public boolean linkReturnDispatch(UUID returnId, UUID dispatchId) {
+        MaterialReturn found = returns.get(returnId);
+        if (found == null || found.returnDispatchId() != null) {
+            return false;
+        }
+        found.restoreReturnDispatch(dispatchId);
+        return true;
+    }
+
+    @Override
     public Optional<MaterialReturn> find(UUID returnId) {
         return Optional.ofNullable(returns.get(returnId)).map(this::copy);
     }
@@ -63,6 +73,7 @@ public class InMemoryMaterialReturnRepository implements MaterialReturnRepositor
         copy.restore(source.requestedBy(), source.requestedAt(), source.decidedBy(), source.decidedAt(),
                 source.rejectionReason(), source.dispatchedBy(), source.dispatchedAt(), source.receivedBy(),
                 source.receivedAt(), source.cancelledBy(), source.cancelledAt());
+        copy.restoreReturnDispatch(source.returnDispatchId());
         return copy;
     }
 }

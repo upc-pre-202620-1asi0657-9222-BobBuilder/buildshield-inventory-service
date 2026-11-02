@@ -396,4 +396,45 @@ class MaterialReturnCommandServiceTest {
     private StockItem item(Site site, MaterialInfo material) {
         return stock.find(site.id(), material.id()).orElseThrow();
     }
+
+    @Test
+    void the_return_dispatch_is_kept_once_without_a_new_version_or_an_event() {
+        InMemoryMaterialReturnRepository memory = new InMemoryMaterialReturnRepository();
+        MaterialReturnCommandService linking = new MaterialReturnCommandService(memory, stock,
+                new StockOperations(stock, clock), directory, outbox, clock);
+        UUID worksiteId = UUID.randomUUID();
+        MaterialReturn stored = MaterialReturn.register(worksiteId, UUID.randomUUID(),
+                java.util.List.of(new MaterialReturn.DeclaredLine(UUID.randomUUID(), java.math.BigDecimal.ONE, null)), null,
+                UUID.randomUUID(), clock.instant());
+        memory.add(stored);
+        UUID dispatchId = UUID.randomUUID();
+
+        linking.linkReturnDispatch(stored.id(), dispatchId);
+        linking.linkReturnDispatch(stored.id(), UUID.randomUUID());
+        linking.linkReturnDispatch(UUID.randomUUID(), dispatchId);
+
+        MaterialReturn found = memory.find(stored.id()).orElseThrow();
+        assertThat(found.returnDispatchId()).isEqualTo(dispatchId);
+        assertThat(found.version()).isZero();
+        org.mockito.Mockito.verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void material_return_dispatched_carries_worksite_warehouse_and_lines() {
+        UUID worksiteId = UUID.randomUUID();
+        UUID warehouseId = UUID.randomUUID();
+        UUID materialId = UUID.randomUUID();
+        MaterialReturn stored = MaterialReturn.register(worksiteId, warehouseId,
+                java.util.List.of(new MaterialReturn.DeclaredLine(materialId, new java.math.BigDecimal("12.5"), null)),
+                null, UUID.randomUUID(), clock.instant());
+
+        com.fasterxml.jackson.databind.JsonNode payload = new com.fasterxml.jackson.databind.ObjectMapper()
+                .valueToTree(MaterialReturnCommandService.event(stored));
+
+        assertThat(payload.path("returnId").asText()).isEqualTo(stored.id().toString());
+        assertThat(payload.path("worksiteId").asText()).isEqualTo(worksiteId.toString());
+        assertThat(payload.path("warehouseId").asText()).isEqualTo(warehouseId.toString());
+        assertThat(payload.path("lines").get(0).path("materialId").asText()).isEqualTo(materialId.toString());
+        assertThat(payload.path("lines").get(0).path("quantity").decimalValue()).isEqualByComparingTo("12.5");
+    }
 }

@@ -18,6 +18,14 @@ public interface MaterialReturnRepository {
      */
     boolean update(MaterialReturn materialReturn);
 
+    /**
+     * Guarda el despacho de retorno que creó ordering, si la devolución aún no tiene uno. No cambia la versión: es una
+     * referencia, y no debe hacer fallar a quien está revisando la devolución.
+     *
+     * @return {@code false} si la devolución no existe o ya tenía despacho
+     */
+    boolean linkReturnDispatch(UUID returnId, UUID dispatchId);
+
     Optional<MaterialReturn> find(UUID returnId);
 
     /**

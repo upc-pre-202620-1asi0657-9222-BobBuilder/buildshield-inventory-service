@@ -13,7 +13,7 @@ detallada en `DESVIACIONES.md`.
 | Base | `inventory_db` (PostgreSQL 16+) |
 | Paquete | `pe.buildshield.inventory` (kernel compartido copiado de iam en `pe.buildshield.inventory.shared`) |
 | Publica | `buildshield.inventory`: `StockReserved`, `StockReservationRejected`, `StockDeducted`, `StockReceived`, `StockReleased`, `StockEntryRegistered` (con `entryType`), `StockAdjusted`, `MaterialReturnRequested`, `MaterialReturnApproved`, `MaterialReturnRejected`, `MaterialReturnDispatched`, `MaterialReturnReceived`, `MaterialReturnCancelled` |
-| Consume | `buildshield.organization`: `LocationRegistered/Updated`, `MaterialRegistered/Updated`, `StaffAssigned/Unassigned` (proyecciones); `buildshield.ordering`: `OrderApproved`, `DispatchDeparted`, `ReceptionPartiallyReceived`, `ReceptionConfirmed`, `OrderRejected`, `OrderClosed` (saga) |
+| Consume | `buildshield.organization`: `LocationRegistered/Updated`, `MaterialRegistered/Updated`, `StaffAssigned/Unassigned` (proyecciones); `buildshield.ordering`: `OrderApproved`, `DispatchDeparted`, `ReceptionPartiallyReceived`, `ReceptionConfirmed`, `OrderRejected`, `OrderClosed` (saga); `ReturnDispatchCreated` (guarda `return_dispatch_id` en la devolución). `DispatchDeparted` y las recepciones de un despacho de retorno (`returnDispatch: true`, o `DispatchDeparted` sin `orderId`) no mueven stock |
 
 ## Endpoints
 

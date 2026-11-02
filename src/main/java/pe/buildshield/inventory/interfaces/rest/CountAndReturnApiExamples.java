@@ -49,6 +49,7 @@ final class CountAndReturnApiExamples {
               "status": "RECEIVED",
               "note": "Saldo al cierre del vaciado del piso 12",
               "hasRejections": true,
+              "returnDispatchId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
               "registeredBy": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
               "registeredAt": "2026-11-20T16:00:00Z",
               "requestedBy": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",

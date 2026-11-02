@@ -154,7 +154,8 @@ public class MaterialReturnQueryService {
         return found.stream().map(materialReturn -> new ReturnView(materialReturn.id(), materialReturn.worksiteId(),
                 name(materialReturn.worksiteId(), names), materialReturn.warehouseId(),
                 name(materialReturn.warehouseId(), names), materialReturn.status().name(), materialReturn.note(),
-                materialReturn.hasRejections(), materialReturn.registeredBy(), materialReturn.registeredAt(),
+                materialReturn.hasRejections(), materialReturn.returnDispatchId(), materialReturn.registeredBy(),
+                materialReturn.registeredAt(),
                 materialReturn.requestedBy(), materialReturn.requestedAt(), materialReturn.decidedBy(),
                 materialReturn.decidedAt(), materialReturn.rejectionReason(), materialReturn.dispatchedBy(),
                 materialReturn.dispatchedAt(), materialReturn.receivedBy(), materialReturn.receivedAt(),
@@ -183,7 +184,8 @@ public class MaterialReturnQueryService {
 
     /** Devolución de saldos con sus líneas. */
     public record ReturnView(UUID id, UUID worksiteId, String worksiteName, UUID warehouseId, String warehouseName,
-            String status, String note, boolean hasRejections, UUID registeredBy, Instant registeredAt,
+            String status, String note, boolean hasRejections, UUID returnDispatchId, UUID registeredBy,
+            Instant registeredAt,
             UUID requestedBy, Instant requestedAt, UUID decidedBy, Instant decidedAt, String rejectionReason,
             UUID dispatchedBy, Instant dispatchedAt, UUID receivedBy, Instant receivedAt, UUID cancelledBy,
             Instant cancelledAt,
