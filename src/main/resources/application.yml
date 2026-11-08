@@ -1,0 +1,74 @@
+spring:
+  application:
+    name: buildshield-inventory-service
+  profiles:
+    default: local
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:inventory_db}
+    username: ${DB_USER:inventory_service}
+    password: ${DB_PASSWORD:inventory_service}
+    hikari:
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      validation-timeout: 2000
+      data-source-properties:
+        options: "-c statement_timeout=${DB_STATEMENT_TIMEOUT_MS:5000} -c lock_timeout=${DB_LOCK_TIMEOUT_MS:2000}"
+        connectTimeout: 5
+        socketTimeout: 10
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.block.ms: 5000
+        delivery.timeout.ms: 10000
+        request.timeout.ms: 5000
+    consumer:
+      group-id: ${spring.application.name}
+      auto-offset-reset: earliest
+    admin:
+      fail-fast: false
+      properties:
+        request.timeout.ms: 5000
+        default.api.timeout.ms: 10000
+
+server:
+  # Detrás del gateway: Swagger "Try it out" usa el host del gateway (X-Forwarded-*).
+  forward-headers-strategy: framework
+  port: ${SERVER_PORT:8083}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  default-produces-media-type: application/json
+  api-docs:
+    path: /api/v1/api-docs
+
+buildshield:
+  security:
+    # Emisor de los tokens: los emite iam con su clave privada; este servicio solo valida con la pública.
+    issuer: buildshield-iam
+    jwt-public-key: ${BUILDSHIELD_JWT_PUBLIC_KEY}
+  # Según el contrato (§2), la idempotencia HTTP es solo de ordering y discrepancy: sin tabla idempotency_keys.
+  # Las escrituras de inventario por eventos son idempotentes por processed_events.
+  idempotency:
+    enabled: false
+  messaging:
+    topic: buildshield.inventory
+    consumes:
+      organization: buildshield.organization
+      ordering: buildshield.ordering

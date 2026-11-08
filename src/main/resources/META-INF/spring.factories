@@ -1,0 +1,2 @@
+org.springframework.boot.env.EnvironmentPostProcessor=\
+  pe.buildshield.inventory.shared.correlation.CorrelationIdLoggingEnvironmentPostProcessor

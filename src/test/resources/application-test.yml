@@ -1,0 +1,55 @@
+# Perfil test: Testcontainers (@ServiceConnection) aporta URL y credenciales
+# de PostgreSQL.
+spring:
+  datasource:
+    hikari:
+      minimum-idle: 1
+      maximum-pool-size: 6
+  jpa:
+    show-sql: false
+
+buildshield:
+  # Las pruebas invocan los trabajos periódicos a mano.
+  scheduling:
+    enabled: false
+  security:
+    # Par de claves RSA SOLO PARA PRUEBAS. Nunca usarlo en local ni en producción.
+    jwt-public-key: |
+      -----BEGIN PUBLIC KEY-----
+      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkeY/8gUggl4mtt9tama6
+      IQJ4X924vwRBl6Ipv8c2b4X0mcVdtJayXauzx/T4Zx4zyr5dzk0EelE1uJxr0asZ
+      ZGsh5TB7t01Csr25i+q8PFV+5TpQTBOcTe8al9bGZMqkRkWeUAj5HoifHl0xBbrb
+      lN7XqfS4z2h9OVoU2to6T+2G1MxV/x0sr18jXkb2Tg0fb4a6Xgf6q7qf3xsuSfeX
+      NJ6PtAYiqlodoi0mUFehm8AiN4vEU4TNYcazDLiTJqhthZgvM8TGULVKYclJeUpL
+      w40TRKtbE5sMJZplA0WwWIhQ1V4sisaFtym9nyE0v1/F3QcWI5if/rSuFiXbVoft
+      YwIDAQAB
+      -----END PUBLIC KEY-----
+    jwt-private-key: |
+      -----BEGIN PRIVATE KEY-----
+      MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCR5j/yBSCCXia2
+      321qZrohAnhf3bi/BEGXoim/xzZvhfSZxV20lrJdq7PH9PhnHjPKvl3OTQR6UTW4
+      nGvRqxlkayHlMHu3TUKyvbmL6rw8VX7lOlBME5xN7xqX1sZkyqRGRZ5QCPkeiJ8e
+      XTEFutuU3tep9LjPaH05WhTa2jpP7YbUzFX/HSyvXyNeRvZODR9vhrpeB/qrup/f
+      Gy5J95c0no+0BiKqWh2iLSZQV6GbwCI3i8RThM1hxrMMuJMmqG2FmC8zxMZQtUph
+      yUl5SkvDjRNEq1sTmwwlmmUDRbBYiFDVXiyKxoW3Kb2fITS/X8XdBxYjmJ/+tK4W
+      JdtWh+1jAgMBAAECggEAF+2v6iUeHlOLvO1q+AruFvDdRjfKj4WGrnRZrYriKitJ
+      oRimFDKtAUDiZPaP8PWan/NV1jp6dAcyrNr2sfYCXZ5WekzX1YnV2RPVxRVUFv8c
+      p0LHnZqPxZZkAagndKtpgt7zJoQ6O2BD3IqDOkHZtpJPw5+P2fB0rT3Rcs1cx/PZ
+      Bl16+kR3lZ5bfSD00mt5K88JXJUJ/oCtE0WgYO0Gi00Gi+diLH5/GdmPnR9EDExG
+      NMJLVJLA+GD5qW7H3b1hi4p6jk15jia6NWpXfvpxI+p/9Uvfj71mXWVLdtrySp0E
+      Jn4FnlSgBEqhlnLcY9vvj9ttGQWZRguEcPgUyoY3tQKBgQDC9hNGUaCzTXke6dHH
+      XzAyclApsM6JQgX7bmBbDoKM8waY65N5Dxuu2kqOPPJa6Tciw4nwEVnAW+FVAHVB
+      wjCw+MO1e9kk3l0pcxwH8dmoTUzd+hnUqkA6t3HEQYmNRrtimfqBmhzi29g5+2Fz
+      mgjm/sbX0QYFkwvPBoG9NOf+bwKBgQC/k+yzamHivHD2/5yK5P7gBpqnN4WSuGrt
+      D3qiTGS/8ESSSaV5jtfKOA+GtWdSBWA4+6WC4MPx4U1RIRSkD82mi3jJ3miOPza3
+      YfaORcoFncWx8aB5SRhdilGe7mHs8X84bzxFdUuV2r5HWCRvFxClsBTZdSaSqiMp
+      VenWKjj6TQKBgQDBZLxF+t8APg+x/JtdvCzhPcgLMxoNyfKJMTpf2QrjqoeW1cia
+      Q8RgNKXUZty6FbHdyD5iZ7OyPvJNEYE/U9RdGMd6lXoXOoULguYBc4VHkDZ504gg
+      DypblHFEDwbVn55t9vQp76hL2WyqR5Spydie24h/uRbSHMWP/ZJhD8Q5/QKBgHlL
+      mTRHiM5b7VIVqPGv50fEJqr01ld8+AY8JLMZlziHUYMlqeV68VmRgRMTS+V8jd3G
+      RpbE5IsC0UcqoLz3XIe0CrgVXzGhCG23UrnlqfFAYWk2yRnBk/G1n9P2rn2ssZXz
+      p796cm7g3lShk//aJKojADBmohN+MWD8il8UwJqJAoGAK5Bv1S7oRCAh9vGciu+v
+      1iDDfcnT64kZThIPTxCRDuCEHLRN9BAVv3Lk4O7AsfhsexqHohPL0jdkqcNSlDO3
+      LImMWywGxDhD9VtwCAWs5M2hS8RdFUMG6Ys93bt0L1fyAQPMvjfHxbv4zfXNdDaR
+      oJjOX4F5onwx7p497GvY35s=
+      -----END PRIVATE KEY-----
